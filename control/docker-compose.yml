@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  cloud-api:
+    build: .
+    container_name: cloud-platform-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      - /var/lib/libvirt/images:/var/lib/libvirt/images
+      - ./images:/app/images
+      - ./templates:/app/templates
+    environment:
+      - LIBVIRT_URI=qemu:///system
+    privileged: true
+    restart: unless-stopped

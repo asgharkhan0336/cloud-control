@@ -1,0 +1,196 @@
+# ============================================
+# Cloud Platform API - Git Ignore File
+# ============================================
+
+# Python
+# --------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+*.log
+
+# Virtual Environment
+# --------------------------------------------
+.venv/
+venv/
+env/
+.virtualenv/
+
+# IDE
+# --------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.pydevproject
+.settings/
+*.sublime-*
+
+# Environment Variables
+# --------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# Database
+# --------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+postgresql/
+pgdata/
+
+# Libvirt / VM Files
+# --------------------------------------------
+/var/lib/libvirt/images/*.qcow2
+/var/lib/libvirt/images/*.img
+/images/*.qcow2
+/images/*.img
+/templates/*.xml
+
+# Logs
+# --------------------------------------------
+logs/
+*.log
+/var/log/cloud-platform/
+nohup.out
+
+# Backup Files
+# --------------------------------------------
+*.backup
+*.bak
+*.tar
+*.tar.gz
+*.zip
+backups/
+
+# Secrets & Keys
+# --------------------------------------------
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+.ssh/
+*.secret
+secrets.yaml
+credentials.json
+
+# OVN / Network State
+# --------------------------------------------
+ovn-backup/
+ovs-backup/
+*.ovnbackup
+
+# Temporary Files
+# --------------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+.cache/
+
+# API Keys and Tokens
+# --------------------------------------------
+.api_key
+*.token
+tokens.txt
+
+# System Files
+# --------------------------------------------
+Thumbs.db
+desktop.ini
+.directory
+
+# Docker
+# --------------------------------------------
+.docker/
+docker-compose.override.yml
+
+# Testing
+# --------------------------------------------
+.pytest_cache/
+.tests/
+coverage.xml
+*.cover
+
+# Documentation Build
+# --------------------------------------------
+docs/_build/
+site/
+
+# Jupyter Notebooks
+# --------------------------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# Cloud Images
+# --------------------------------------------
+base-images/
+*.qcow2
+*.img
+*.iso
+
+# Database Dumps
+# --------------------------------------------
+*.dump
+*.sql.gz
+dumps/
+
+# Custom - Cloud Platform Specific
+# --------------------------------------------
+/var/run/cloud-platform/
+/var/lib/cloud-platform/
+/floating_ips.txt
+/network_config_backup/
+/vm_snapshots/
+
+# Monitoring Data
+# --------------------------------------------
+prometheus/data/
+grafana/data/
+
+# Customer Data (should never be in git)
+# --------------------------------------------
+customer-data/
+user-data/
+billing-records/
+invoices/
+
+# ============================================
+# IMPORTANT: Never commit these!
+# ============================================
+# - Database passwords
+# - API secret keys
+# - Customer information
+# - SSH private keys
+# - SSL certificates
+# - Billing information
+# ============================================

@@ -1,0 +1,30 @@
+# Add to create_vm function after VM creation:
+
+# Allocate IP for VM
+from app.services.subnet_manager import SubnetManager
+from app.services.ovn_service import OVNService
+
+# Get tenant's network
+tenant_network = db.query(Network).filter(
+    Network.owner_id == current_user.id
+).first()
+
+if tenant_network:
+    subnet_mgr = SubnetManager(db)
+    private_ip = subnet_mgr.allocate_ip_for_vm(tenant_network.cidr, vm_request.name)
+    
+    if private_ip:
+        # Create OVN port
+        ovn = OVNService()
+        port_info = ovn.create_vm_port(
+            current_user.username, 
+            vm_request.name, 
+            private_ip
+        )
+        
+        # Update VM with network info
+        db_vm.private_ip = private_ip
+        db_vm.network_name = tenant_network.name
+        db.commit()
+        
+        print(f"✅ VM {vm_request.name} assigned IP: {private_ip}")

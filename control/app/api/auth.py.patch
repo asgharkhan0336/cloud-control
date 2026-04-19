@@ -1,0 +1,34 @@
+# Add to register function after user creation:
+
+# AUTO-CREATE TENANT NETWORK WITH /28 SUBNET
+from app.services.subnet_manager import SubnetManager
+from app.services.ovn_service import OVNService
+from app.models.database import Network
+
+# Allocate subnet for this tenant
+subnet_mgr = SubnetManager(db)
+subnet_cidr = subnet_mgr.allocate_subnet(user.id)
+
+if subnet_cidr:
+    subnet_info = subnet_mgr.get_subnet_info(subnet_cidr)
+    vxlan_id = 100 + user.id
+    
+    # Create network in OVN
+    ovn = OVNService()
+    network_info = ovn.create_tenant_network(user.username, subnet_cidr, vxlan_id)
+    
+    # Save network to database
+    db_network = Network(
+        name=f"tenant-{user.username}",
+        owner_id=user.id,
+        cidr=subnet_cidr,
+        gateway=subnet_info["gateway"],
+        vxlan_id=vxlan_id,
+        is_public=False
+    )
+    db.add(db_network)
+    db.commit()
+    
+    print(f"✅ Network created: {subnet_cidr} for {user.username}")
+else:
+    print(f"⚠️ No available subnets for {user.username}")
