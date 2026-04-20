@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, DECIMAL, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, DECIMAL, Text, UniqueConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -22,6 +22,7 @@ class User(Base):
     quota = relationship("ResourceQuota", back_populates="user", uselist=False, cascade="all, delete-orphan")
     billing_records = relationship("BillingRecord", back_populates="user", cascade="all, delete-orphan")
     networks = relationship("Network", back_populates="owner", cascade="all, delete-orphan")
+    security_groups = relationship("SecurityGroup", back_populates="owner", cascade="all, delete-orphan")
     ssh_keys = relationship("SSHKey", back_populates="user", cascade="all, delete-orphan")
 
 class APIKey(Base):
@@ -54,9 +55,17 @@ class VM(Base):
     network_name = Column(String(50), default="default")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    vpc_id = Column(Integer, ForeignKey("networks.id"), nullable=True)
+    subnet_id = Column(Integer, ForeignKey("subnets.id"), nullable=True)
+    private_ip = Column(String(15), nullable=True)
+    floating_ip = Column(String(15), nullable=True)
     
     # Relationships
     owner = relationship("User", back_populates="vms")
+    vpc = relationship("Network", foreign_keys=[vpc_id], back_populates="vms")
+    subnet = relationship("Subnet", foreign_keys=[subnet_id], back_populates="vms")
+    security_groups = relationship("SecurityGroup", secondary="vm_security_groups", back_populates="vms")
 
 class ResourceQuota(Base):
     __tablename__ = "resource_quotas"
