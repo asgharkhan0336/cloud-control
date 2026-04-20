@@ -3,8 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.config import settings
-from app.api import vms, host, auth, vpc,subnets,firewall,networks
-from app.api import networks
+from app.api import vms, host, auth, vpc, subnets, firewall
 
 # Create FastAPI app
 app = FastAPI(
