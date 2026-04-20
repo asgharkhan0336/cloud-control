@@ -26,11 +26,11 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router)
-app.include_router(networks.router)
 app.include_router(vms.router)
-app.include_router(networks.router)
 app.include_router(host.router)
-app.include_router(networks.router)
+app.include_router(vpc.router)
+app.include_router(subnets.router)
+app.include_router(firewall.router)
 
 @app.get("/")
 async def root():
