@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.config import settings
-from app.api import vms, host, auth, vpc, subnets, firewall
+from app.api import vms, host, auth, vpc, subnets, firewall, ssh_keys, floating_ips
 
 # Create FastAPI app
 app = FastAPI(
@@ -31,6 +31,8 @@ app.include_router(host.router)
 app.include_router(vpc.router)
 app.include_router(subnets.router)
 app.include_router(firewall.router)
+app.include_router(ssh_keys.router)
+app.include_router(floating_ips.router)
 
 @app.get("/")
 async def root():
