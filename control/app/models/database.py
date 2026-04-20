@@ -22,6 +22,7 @@ class User(Base):
     quota = relationship("ResourceQuota", back_populates="user", uselist=False, cascade="all, delete-orphan")
     billing_records = relationship("BillingRecord", back_populates="user", cascade="all, delete-orphan")
     networks = relationship("Network", back_populates="owner", cascade="all, delete-orphan")
+    ssh_keys = relationship("SSHKey", back_populates="user", cascade="all, delete-orphan")
 
 class APIKey(Base):
     __tablename__ = "api_keys"
@@ -115,3 +116,20 @@ class FloatingIP(Base):
     
     # Relationships
     network = relationship("Network", back_populates="floating_ips")
+
+class SSHKey(Base):
+    __tablename__ = "ssh_keys"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    name = Column(String(50), nullable=False)
+    public_key = Column(Text, nullable=False)
+    fingerprint = Column(String(255), nullable=False)
+    key_type = Column(String(50))
+    key_bits = Column(Integer)
+    key_comment = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used = Column(DateTime(timezone=True))
+    
+    # Relationships
+    user = relationship("User", back_populates="ssh_keys")
