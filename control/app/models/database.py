@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, DECIMAL, Text, UniqueConstraint
+"""Database Models for Cloud Platform"""
+
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, 
+    ForeignKey, DECIMAL, Text, UniqueConstraint
+)
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
+
+# ============================================
+# User and Authentication Models
+# ============================================
 
 class User(Base):
     __tablename__ = "users"
@@ -37,35 +46,7 @@ class APIKey(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True))
     
-    # Relationships
     user = relationship("User", back_populates="api_keys")
-
-class VM(Base):
-    __tablename__ = "vms"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50), unique=True, nullable=False, index=True)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
-    memory = Column(Integer, nullable=False)
-    vcpus = Column(Integer, nullable=False)
-    disk_size = Column(Integer, nullable=False)
-    os_variant = Column(String(50), nullable=False)
-    status = Column(String(20), default="stopped")
-    ip_address = Column(String(15))
-    network_name = Column(String(50), default="default")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    vpc_id = Column(Integer, ForeignKey("networks.id"), nullable=True)
-    subnet_id = Column(Integer, ForeignKey("subnets.id"), nullable=True)
-    private_ip = Column(String(15), nullable=True)
-    floating_ip = Column(String(15), nullable=True)
-    
-    # Relationships
-    owner = relationship("User", back_populates="vms")
-    vpc = relationship("Network", foreign_keys=[vpc_id], back_populates="vms")
-    subnet = relationship("Subnet", foreign_keys=[subnet_id], back_populates="vms")
-    security_groups = relationship("SecurityGroup", secondary="vm_security_groups", back_populates="vms")
 
 class ResourceQuota(Base):
     __tablename__ = "resource_quotas"
@@ -79,7 +60,6 @@ class ResourceQuota(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # Relationships
     user = relationship("User", back_populates="quota")
 
 class BillingRecord(Base):
@@ -93,38 +73,7 @@ class BillingRecord(Base):
     rate_per_hour = Column(DECIMAL(10, 4), nullable=False)
     billed_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     user = relationship("User", back_populates="billing_records")
-
-class Network(Base):
-    __tablename__ = "networks"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50), unique=True, nullable=False, index=True)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
-    cidr = Column(String(20), nullable=False)
-    gateway = Column(String(15), nullable=False)
-    vlan_id = Column(Integer, unique=True, nullable=True)
-    vxlan_id = Column(Integer, unique=True, nullable=True)
-    is_public = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    owner = relationship("User", back_populates="networks")
-    floating_ips = relationship("FloatingIP", back_populates="network")
-
-class FloatingIP(Base):
-    __tablename__ = "floating_ips"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    ip_address = Column(String(15), unique=True, nullable=False)
-    network_id = Column(Integer, ForeignKey("networks.id", ondelete="CASCADE"))
-    vm_name = Column(String(50), ForeignKey("vms.name", ondelete="SET NULL"), nullable=True)
-    is_allocated = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    network = relationship("Network", back_populates="floating_ips")
 
 class SSHKey(Base):
     __tablename__ = "ssh_keys"
@@ -140,15 +89,43 @@ class SSHKey(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_used = Column(DateTime(timezone=True))
     
-    # Relationships
     user = relationship("User", back_populates="ssh_keys")
+    
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_ssh_key_user_name'),)
 
-
-    # ============================================
-# VPC (Virtual Private Cloud) Model
 # ============================================
+# VM Model
+# ============================================
+
+class VM(Base):
+    __tablename__ = "vms"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    vpc_id = Column(Integer, ForeignKey("networks.id"), nullable=True)
+    subnet_id = Column(Integer, ForeignKey("subnets.id"), nullable=True)
+    memory = Column(Integer, nullable=False)
+    vcpus = Column(Integer, nullable=False)
+    disk_size = Column(Integer, nullable=False)
+    os_variant = Column(String(50), nullable=False)
+    status = Column(String(20), default="stopped")
+    private_ip = Column(String(15))
+    floating_ip = Column(String(15))
+    network_name = Column(String(50), default="default")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    owner = relationship("User", back_populates="vms")
+    vpc = relationship("Network", foreign_keys=[vpc_id], back_populates="vms")
+    subnet = relationship("Subnet", foreign_keys=[subnet_id], back_populates="vms")
+    security_groups = relationship("SecurityGroup", secondary="vm_security_groups", back_populates="vms")
+
+# ============================================
+# VPC and Networking Models
+# ============================================
+
 class Network(Base):
-    """VPC - Virtual Private Cloud for tenant isolation"""
     __tablename__ = "networks"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -157,24 +134,17 @@ class Network(Base):
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     cidr = Column(String(20), nullable=False)
     gateway = Column(String(15), nullable=False)
-    vni = Column(Integer, unique=True, nullable=False)  # Geneve VNI for isolation
+    vni = Column(Integer, unique=True, nullable=False)
     is_default = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     owner = relationship("User", back_populates="networks")
     subnets = relationship("Subnet", back_populates="vpc", cascade="all, delete-orphan")
-    vms = relationship("VM", back_populates="vpc")
+    vms = relationship("VM", foreign_keys=[VM.vpc_id], back_populates="vpc")
     
-    __table_args__ = (
-        UniqueConstraint('owner_id', 'name', name='uq_network_owner_name'),
-    )
+    __table_args__ = (UniqueConstraint('owner_id', 'name', name='uq_network_owner_name'),)
 
-# ============================================
-# Subnet Model
-# ============================================
 class Subnet(Base):
-    """Subnet within a VPC"""
     __tablename__ = "subnets"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -185,19 +155,16 @@ class Subnet(Base):
     is_public = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     vpc = relationship("Network", back_populates="subnets")
-    vms = relationship("VM", back_populates="subnet")
+    vms = relationship("VM", foreign_keys=[VM.subnet_id], back_populates="subnet")
     
-    __table_args__ = (
-        UniqueConstraint('vpc_id', 'name', name='uq_subnet_vpc_name'),
-    )
+    __table_args__ = (UniqueConstraint('vpc_id', 'name', name='uq_subnet_vpc_name'),)
 
 # ============================================
-# Security Group Model
+# Security Group and Firewall Models
 # ============================================
+
 class SecurityGroup(Base):
-    """Security Group - Firewall rules container"""
     __tablename__ = "security_groups"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -207,26 +174,19 @@ class SecurityGroup(Base):
     is_default = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     owner = relationship("User", back_populates="security_groups")
     rules = relationship("FirewallRule", back_populates="security_group", cascade="all, delete-orphan")
     vms = relationship("VM", secondary="vm_security_groups", back_populates="security_groups")
     
-    __table_args__ = (
-        UniqueConstraint('owner_id', 'name', name='uq_security_group_owner_name'),
-    )
+    __table_args__ = (UniqueConstraint('owner_id', 'name', name='uq_security_group_owner_name'),)
 
-# ============================================
-# Firewall Rule Model
-# ============================================
 class FirewallRule(Base):
-    """Firewall Rule - ACL entry"""
     __tablename__ = "firewall_rules"
     
     id = Column(Integer, primary_key=True, index=True)
     security_group_id = Column(Integer, ForeignKey("security_groups.id", ondelete="CASCADE"))
-    direction = Column(String(10), nullable=False)  # 'ingress' or 'egress'
-    protocol = Column(String(10), nullable=False)  # 'tcp', 'udp', 'icmp', 'all'
+    direction = Column(String(10), nullable=False)
+    protocol = Column(String(10), nullable=False)
     port_min = Column(Integer, nullable=True)
     port_max = Column(Integer, nullable=True)
     source_ip = Column(String(20), default="0.0.0.0/0")
@@ -235,14 +195,9 @@ class FirewallRule(Base):
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     security_group = relationship("SecurityGroup", back_populates="rules")
 
-# ============================================
-# VM-Security Group Association Table
-# ============================================
 class VMSecurityGroup(Base):
-    """Many-to-Many relationship between VMs and Security Groups"""
     __tablename__ = "vm_security_groups"
     
     vm_id = Column(Integer, ForeignKey("vms.id", ondelete="CASCADE"), primary_key=True)
@@ -252,21 +207,15 @@ class VMSecurityGroup(Base):
 # ============================================
 # VPC Peering Model
 # ============================================
+
 class VPCPeering(Base):
-    """VPC Peering Connection"""
     __tablename__ = "vpc_peerings"
     
     id = Column(Integer, primary_key=True, index=True)
     vpc_a_id = Column(Integer, ForeignKey("networks.id", ondelete="CASCADE"))
     vpc_b_id = Column(Integer, ForeignKey("networks.id", ondelete="CASCADE"))
-    status = Column(String(20), default="pending")  # 'pending', 'active', 'rejected'
+    status = Column(String(20), default="pending")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     accepted_at = Column(DateTime(timezone=True), nullable=True)
     
-    # Relationships
-    vpc_a = relationship("Network", foreign_keys=[vpc_a_id])
-    vpc_b = relationship("Network", foreign_keys=[vpc_b_id])
-    
-    __table_args__ = (
-        UniqueConstraint('vpc_a_id', 'vpc_b_id', name='uq_vpc_peering'),
-    )
+    __table_args__ = (UniqueConstraint('vpc_a_id', 'vpc_b_id', name='uq_vpc_peering'),)
