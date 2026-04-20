@@ -1,19 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+"""Subnets API - Subnet Management within VPCs"""
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime
 
 from app.database import get_db
 from app.auth.auth import get_current_active_user
-from app.models.database import User, Subnet
+from app.models.database import User
 from app.services.vpc_service import VPCService
 
 router = APIRouter(prefix="/api/v1/subnets", tags=["Subnets"])
 
+# ============================================
+# Pydantic Schemas
+# ============================================
+
 class SubnetCreate(BaseModel):
-    name: str
-    cidr: str
+    name: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9-]+$")
     vpc_id: int
+    cidr: str = Field(..., pattern="^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$")
     is_public: bool = False
 
 class SubnetResponse(BaseModel):
@@ -23,28 +30,31 @@ class SubnetResponse(BaseModel):
     cidr: str
     gateway: str
     is_public: bool
-    created_at: Optional[str]
+    total_ips: int
+    used_ips: int
+    available_ips: int
+    created_at: datetime
     
     class Config:
         from_attributes = True
 
+# ============================================
+# Subnet Endpoints
+# ============================================
+
 @router.get("/", response_model=List[SubnetResponse])
 async def list_subnets(
-    vpc_id: Optional[int] = None,
+    vpc_id: Optional[int] = Query(None, description="Filter by VPC ID"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """List subnets (optionally filtered by VPC)"""
+    service = VPCService(db)
+    
     if vpc_id:
-        service = VPCService(db)
         return service.list_subnets(vpc_id, current_user.id)
     
-    # If no vpc_id, return all user's subnets
-    from app.models.database import Network
-    subnets = db.query(Subnet).join(Network).filter(
-        Network.owner_id == current_user.id
-    ).all()
-    return subnets
+    return service.list_all_user_subnets(current_user.id)
 
 @router.post("/", response_model=SubnetResponse, status_code=status.HTTP_201_CREATED)
 async def create_subnet(
@@ -64,6 +74,8 @@ async def create_subnet(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create subnet: {str(e)}")
 
 @router.get("/{subnet_id}", response_model=SubnetResponse)
 async def get_subnet(
@@ -72,12 +84,8 @@ async def get_subnet(
     db: Session = Depends(get_db)
 ):
     """Get subnet details"""
-    from app.models.database import Network
-    subnet = db.query(Subnet).join(Network).filter(
-        Subnet.id == subnet_id,
-        Network.owner_id == current_user.id
-    ).first()
-    
+    service = VPCService(db)
+    subnet = service.get_subnet(subnet_id, current_user.id)
     if not subnet:
         raise HTTPException(status_code=404, detail="Subnet not found")
     return subnet
@@ -94,3 +102,15 @@ async def delete_subnet(
         return service.delete_subnet(subnet_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete subnet: {str(e)}")
+
+@router.get("/{subnet_id}/available-ips")
+async def get_available_ips(
+    subnet_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get available IP addresses in a subnet"""
+    service = VPCService(db)
+    return service.get_available_ips(subnet_id, current_user.id)

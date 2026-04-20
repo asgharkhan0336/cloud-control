@@ -91,7 +91,7 @@ const useVPCs = () => {
   return useQuery({
     queryKey: ['vpcs'],
     queryFn: async () => {
-      const response = await apiClient.get<VPCResponse[]>('/vpc/list');
+      const response = await apiClient.get<VPCResponse[]>('/vpc/');
       return response;
     },
   });

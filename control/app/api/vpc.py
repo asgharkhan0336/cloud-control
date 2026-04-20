@@ -1,9 +1,10 @@
-"""VPC API Endpoints"""
+"""VPC API - Virtual Private Cloud Management"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime
 
 from app.database import get_db
 from app.auth.auth import get_current_active_user
@@ -13,13 +14,13 @@ from app.services.vpc_service import VPCService
 router = APIRouter(prefix="/api/v1/vpc", tags=["VPC"])
 
 # ============================================
-# Pydantic Models
+# Pydantic Schemas
 # ============================================
 
 class VPCCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9-]+$")
     description: Optional[str] = Field(None, max_length=255)
-    subnet_cidr: Optional[str] = None
+    cidr: Optional[str] = Field(None, pattern="^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$")
 
 class VPCResponse(BaseModel):
     id: int
@@ -29,25 +30,12 @@ class VPCResponse(BaseModel):
     gateway: str
     vni: int
     is_default: bool
-    created_at: Optional[str]
+    created_at: datetime
     vm_count: int
     subnet_count: int
-
-class SubnetCreate(BaseModel):
-    name: str = Field(..., min_length=3, max_length=50)
-    cidr: str
-    is_public: bool = False
-
-class SubnetResponse(BaseModel):
-    id: int
-    name: str
-    cidr: str
-    gateway: str
-    is_public: bool
-    total_ips: int
-    used_ips: int
-    available_ips: int
-    created_at: Optional[str]
+    
+    class Config:
+        from_attributes = True
 
 class VPCPeeringCreate(BaseModel):
     peer_vpc_id: int
@@ -57,12 +45,24 @@ class VPCPeeringResponse(BaseModel):
     vpc_a_id: int
     vpc_b_id: int
     status: str
-    created_at: Optional[str]
-    accepted_at: Optional[str]
+    created_at: datetime
+    accepted_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
 
 # ============================================
 # VPC Endpoints
 # ============================================
+
+@router.get("/", response_model=List[VPCResponse])
+async def list_vpcs(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """List all VPCs for the current user"""
+    service = VPCService(db)
+    return service.list_user_vpcs(current_user.id)
 
 @router.post("/", response_model=VPCResponse, status_code=status.HTTP_201_CREATED)
 async def create_vpc(
@@ -77,21 +77,12 @@ async def create_vpc(
             user_id=current_user.id,
             name=vpc_data.name,
             description=vpc_data.description,
-            subnet_cidr=vpc_data.subnet_cidr
+            cidr=vpc_data.cidr
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/", response_model=List[VPCResponse])
-async def list_vpcs(
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """List all VPCs"""
-    service = VPCService(db)
-    return service.list_user_vpcs(current_user.id)
+        raise HTTPException(status_code=500, detail=f"Failed to create VPC: {str(e)}")
 
 @router.get("/{vpc_id}", response_model=VPCResponse)
 async def get_vpc(
@@ -118,63 +109,11 @@ async def delete_vpc(
         return service.delete_vpc(vpc_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-# ============================================
-# Subnet Endpoints
-# ============================================
-
-@router.post("/{vpc_id}/subnets", response_model=SubnetResponse)
-async def create_subnet(
-    vpc_id: int,
-    subnet_data: SubnetCreate,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """Create a subnet in a VPC"""
-    try:
-        service = VPCService(db)
-        return service.create_subnet(
-            vpc_id=vpc_id,
-            user_id=current_user.id,
-            name=subnet_data.name,
-            cidr=subnet_data.cidr,
-            is_public=subnet_data.is_public
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.get("/{vpc_id}/subnets", response_model=List[SubnetResponse])
-async def list_subnets(
-    vpc_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """List subnets in a VPC"""
-    try:
-        service = VPCService(db)
-        return service.list_subnets(vpc_id, current_user.id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.delete("/subnets/{subnet_id}")
-async def delete_subnet(
-    subnet_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """Delete a subnet"""
-    try:
-        service = VPCService(db)
-        return service.delete_subnet(subnet_id, current_user.id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ============================================
-# VPC Peering Endpoints
-# ============================================
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete VPC: {str(e)}")
 
 @router.post("/{vpc_id}/peer", response_model=VPCPeeringResponse)
-async def create_peering(
+async def create_vpc_peering(
     vpc_id: int,
     peering_data: VPCPeeringCreate,
     current_user: User = Depends(get_current_active_user),
@@ -186,9 +125,11 @@ async def create_peering(
         return service.create_peering(vpc_id, peering_data.peer_vpc_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create peering: {str(e)}")
 
 @router.post("/peer/{peering_id}/accept")
-async def accept_peering(
+async def accept_vpc_peering(
     peering_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -199,3 +140,15 @@ async def accept_peering(
         return service.accept_peering(peering_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to accept peering: {str(e)}")
+
+@router.get("/{vpc_id}/peerings", response_model=List[VPCPeeringResponse])
+async def list_vpc_peerings(
+    vpc_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """List all peerings for a VPC"""
+    service = VPCService(db)
+    return service.list_peerings(vpc_id, current_user.id)

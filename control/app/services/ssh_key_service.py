@@ -1,11 +1,11 @@
-"""SSH Key Service - Manages SSH public keys"""
+"""SSH Key Service - SSH Public Key Management"""
 
 import hashlib
 import base64
 import struct
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
-from datetime import datetime
+from sqlalchemy import and_
 
 from app.models.database import SSHKey, User
 
@@ -14,10 +14,7 @@ class SSHKeyService:
         self.db = db
     
     def _parse_ssh_key(self, public_key: str) -> tuple:
-        """
-        Parse SSH public key and extract type, key data, and generate fingerprint
-        Returns: (key_type, key_bits, fingerprint, key_comment)
-        """
+        """Parse SSH public key and generate fingerprint"""
         try:
             parts = public_key.strip().split()
             if len(parts) < 2:
@@ -27,28 +24,20 @@ class SSHKeyService:
             key_data = parts[1]
             key_comment = parts[2] if len(parts) > 2 else ""
             
-            # Decode base64 key data
             decoded = base64.b64decode(key_data)
             
-            # Generate fingerprint (MD5 - legacy, SHA256 - modern)
-            md5_fingerprint = hashlib.md5(decoded).hexdigest()
-            md5_fingerprint = ':'.join(md5_fingerprint[i:i+2] for i in range(0, len(md5_fingerprint), 2))
-            
-            sha256_fingerprint = base64.b64encode(hashlib.sha256(decoded).digest()).decode()
+            sha256_fingerprint = base64.b64encode(
+                hashlib.sha256(decoded).digest()
+            ).decode()
             fingerprint = f"SHA256:{sha256_fingerprint.rstrip('=')}"
             
-            # Get key bits for RSA keys
             key_bits = 0
             if key_type == "ssh-rsa":
-                # Parse RSA key to get bit length
                 pos = 0
-                # Skip algorithm string
                 alg_len = struct.unpack('>I', decoded[pos:pos+4])[0]
                 pos += 4 + alg_len
-                # Read exponent
                 exp_len = struct.unpack('>I', decoded[pos:pos+4])[0]
                 pos += 4 + exp_len
-                # Read modulus
                 mod_len = struct.unpack('>I', decoded[pos:pos+4])[0]
                 key_bits = mod_len * 8
             elif key_type == "ecdsa-sha2-nistp256":
@@ -65,42 +54,30 @@ class SSHKeyService:
         except Exception as e:
             raise ValueError(f"Failed to parse SSH key: {str(e)}")
     
-    def create_ssh_key(
-        self,
-        user_id: int,
-        name: str,
-        public_key: str,
-        fingerprint: Optional[str] = None
-    ) -> SSHKey:
+    def create_ssh_key(self, user_id: int, name: str, public_key: str) -> Dict:
         """Add a new SSH key for a user"""
         
-        # Check if key name already exists for this user
         existing = self.db.query(SSHKey).filter(
-            SSHKey.user_id == user_id,
-            SSHKey.name == name
+            and_(SSHKey.user_id == user_id, SSHKey.name == name)
         ).first()
         
         if existing:
             raise ValueError(f"SSH key with name '{name}' already exists")
         
-        # Parse and validate the key
-        key_type, key_bits, generated_fingerprint, key_comment = self._parse_ssh_key(public_key)
+        key_type, key_bits, fingerprint, key_comment = self._parse_ssh_key(public_key)
         
-        # Check if the exact same public key already exists
         existing_key = self.db.query(SSHKey).filter(
-            SSHKey.user_id == user_id,
-            SSHKey.fingerprint == generated_fingerprint
+            and_(SSHKey.user_id == user_id, SSHKey.fingerprint == fingerprint)
         ).first()
         
         if existing_key:
             raise ValueError(f"This SSH key already exists with name '{existing_key.name}'")
         
-        # Create the SSH key
         ssh_key = SSHKey(
             user_id=user_id,
             name=name,
             public_key=public_key,
-            fingerprint=fingerprint or generated_fingerprint,
+            fingerprint=fingerprint,
             key_type=key_type,
             key_bits=key_bits,
             key_comment=key_comment
@@ -110,36 +87,36 @@ class SSHKeyService:
         self.db.commit()
         self.db.refresh(ssh_key)
         
-        return ssh_key
+        return self._format_ssh_key(ssh_key)
     
-    def list_user_ssh_keys(self, user_id: int) -> List[SSHKey]:
+    def list_user_ssh_keys(self, user_id: int) -> List[Dict]:
         """List all SSH keys for a user"""
-        return self.db.query(SSHKey).filter(SSHKey.user_id == user_id).all()
+        keys = self.db.query(SSHKey).filter(SSHKey.user_id == user_id).all()
+        return [self._format_ssh_key(key) for key in keys]
     
-    def get_ssh_key(self, key_id: int, user_id: int) -> Optional[SSHKey]:
+    def get_ssh_key(self, key_id: int, user_id: int) -> Optional[Dict]:
         """Get a specific SSH key"""
-        return self.db.query(SSHKey).filter(
-            SSHKey.id == key_id,
-            SSHKey.user_id == user_id
+        key = self.db.query(SSHKey).filter(
+            and_(SSHKey.id == key_id, SSHKey.user_id == user_id)
         ).first()
+        
+        if not key:
+            return None
+        
+        return self._format_ssh_key(key)
     
-    def update_ssh_key(
-        self,
-        key_id: int,
-        user_id: int,
-        name: Optional[str] = None
-    ) -> SSHKey:
-        """Update an SSH key"""
-        ssh_key = self.get_ssh_key(key_id, user_id)
+    def update_ssh_key(self, key_id: int, user_id: int, name: Optional[str] = None) -> Dict:
+        """Update an SSH key's name"""
+        ssh_key = self.db.query(SSHKey).filter(
+            and_(SSHKey.id == key_id, SSHKey.user_id == user_id)
+        ).first()
+        
         if not ssh_key:
             raise ValueError(f"SSH key {key_id} not found")
         
         if name:
-            # Check if name already exists
             existing = self.db.query(SSHKey).filter(
-                SSHKey.user_id == user_id,
-                SSHKey.name == name,
-                SSHKey.id != key_id
+                and_(SSHKey.user_id == user_id, SSHKey.name == name, SSHKey.id != key_id)
             ).first()
             
             if existing:
@@ -150,11 +127,14 @@ class SSHKeyService:
         self.db.commit()
         self.db.refresh(ssh_key)
         
-        return ssh_key
+        return self._format_ssh_key(ssh_key)
     
     def delete_ssh_key(self, key_id: int, user_id: int) -> bool:
         """Delete an SSH key"""
-        ssh_key = self.get_ssh_key(key_id, user_id)
+        ssh_key = self.db.query(SSHKey).filter(
+            and_(SSHKey.id == key_id, SSHKey.user_id == user_id)
+        ).first()
+        
         if not ssh_key:
             raise ValueError(f"SSH key {key_id} not found")
         
@@ -163,11 +143,13 @@ class SSHKeyService:
         
         return True
     
-    def get_ssh_keys_for_vm(self, user_id: int, key_ids: List[int]) -> str:
-        """Get SSH keys formatted for cloud-init"""
-        keys = self.db.query(SSHKey).filter(
-            SSHKey.user_id == user_id,
-            SSHKey.id.in_(key_ids)
-        ).all()
-        
-        return '\n'.join([key.public_key for key in keys])
+    def _format_ssh_key(self, key: SSHKey) -> Dict:
+        """Format SSH key for API response"""
+        return {
+            "id": key.id,
+            "name": key.name,
+            "fingerprint": key.fingerprint,
+            "key_type": key.key_type,
+            "key_bits": key.key_bits,
+            "created_at": key.created_at
+        }

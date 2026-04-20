@@ -1,11 +1,11 @@
-"""Firewall Service - Complete Security Group & Rules Management"""
+"""Firewall Service - Security Groups and Rules Management"""
 
 import subprocess
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from app.models.database import SecurityGroup, FirewallRule, VM, User, VMSecurityGroup
+from app.models.database import SecurityGroup, FirewallRule, VM, User, VMSecurityGroup, Network
 
 class FirewallService:
     def __init__(self, db: Session):
@@ -30,7 +30,6 @@ class FirewallService:
     ) -> Dict:
         """Create a new security group"""
         
-        # Check if name exists for user
         existing = self.db.query(SecurityGroup).filter(
             and_(SecurityGroup.owner_id == user_id, SecurityGroup.name == name)
         ).first()
@@ -38,7 +37,6 @@ class FirewallService:
         if existing:
             raise ValueError(f"Security group '{name}' already exists")
         
-        # Create security group
         sg = SecurityGroup(
             name=name,
             description=description,
@@ -79,12 +77,10 @@ class FirewallService:
         if sg.is_default:
             raise ValueError("Cannot delete default security group")
         
-        # Remove from all VMs first
         self.db.query(VMSecurityGroup).filter(
             VMSecurityGroup.security_group_id == group_id
         ).delete()
         
-        # Delete security group (cascades to rules)
         self.db.delete(sg)
         self.db.commit()
         
@@ -106,7 +102,6 @@ class FirewallService:
     ) -> Dict:
         """Add a firewall rule to a security group"""
         
-        # Verify ownership
         sg = self.db.query(SecurityGroup).filter(
             and_(SecurityGroup.id == group_id, SecurityGroup.owner_id == user_id)
         ).first()
@@ -124,20 +119,11 @@ class FirewallService:
             else:
                 port_min = port_max = int(port_range)
         
-        # Validate protocol
-        if protocol not in ['tcp', 'udp', 'icmp', 'all']:
-            raise ValueError(f"Invalid protocol: {protocol}")
-        
-        # Validate direction
-        if direction not in ['ingress', 'egress']:
-            raise ValueError(f"Invalid direction: {direction}")
-        
         # Get next priority
         max_priority = self.db.query(FirewallRule).filter(
             FirewallRule.security_group_id == group_id
         ).count()
         
-        # Create rule
         rule = FirewallRule(
             security_group_id=group_id,
             direction=direction,
@@ -153,7 +139,6 @@ class FirewallService:
         self.db.commit()
         self.db.refresh(rule)
         
-        # Sync to OVN for all attached VMs
         self._sync_security_group_acls(group_id)
         
         return self._format_rule(rule)
@@ -173,17 +158,6 @@ class FirewallService:
         
         return [self._format_rule(rule) for rule in rules]
     
-    def get_rule(self, rule_id: int, user_id: int) -> Optional[Dict]:
-        """Get a specific firewall rule"""
-        rule = self.db.query(FirewallRule).join(SecurityGroup).filter(
-            and_(FirewallRule.id == rule_id, SecurityGroup.owner_id == user_id)
-        ).first()
-        
-        if not rule:
-            return None
-        
-        return self._format_rule(rule)
-    
     def update_rule(
         self,
         rule_id: int,
@@ -202,17 +176,10 @@ class FirewallService:
         if not rule:
             raise ValueError("Rule not found")
         
-        # Update fields
         if direction:
-            if direction not in ['ingress', 'egress']:
-                raise ValueError(f"Invalid direction: {direction}")
             rule.direction = direction
-        
         if protocol:
-            if protocol not in ['tcp', 'udp', 'icmp', 'all']:
-                raise ValueError(f"Invalid protocol: {protocol}")
             rule.protocol = protocol
-        
         if port_range and rule.protocol in ['tcp', 'udp']:
             if '-' in port_range:
                 parts = port_range.split('-')
@@ -220,17 +187,14 @@ class FirewallService:
                 rule.port_max = int(parts[1])
             else:
                 rule.port_min = rule.port_max = int(port_range)
-        
         if source_ip:
             rule.source_ip = source_ip
-        
         if description is not None:
             rule.description = description
         
         self.db.commit()
         self.db.refresh(rule)
         
-        # Sync to OVN
         self._sync_security_group_acls(rule.security_group_id)
         
         return self._format_rule(rule)
@@ -248,7 +212,6 @@ class FirewallService:
         self.db.delete(rule)
         self.db.commit()
         
-        # Sync remaining rules
         self._sync_security_group_acls(group_id)
         
         return {"success": True, "message": "Rule deleted"}
@@ -265,7 +228,6 @@ class FirewallService:
         rule.enabled = enabled
         self.db.commit()
         
-        # Sync to OVN
         self._sync_security_group_acls(rule.security_group_id)
         
         return self._format_rule(rule)
@@ -274,10 +236,9 @@ class FirewallService:
     # VM Assignment Operations
     # ============================================
     
-    def assign_to_vm(self, group_id: int, vm_name: str, user_id: int) -> Dict:
+    def assign_to_vm(self, group_id: int, vm_id: int, user_id: int) -> Dict:
         """Assign security group to a VM"""
         
-        # Verify ownership of both
         sg = self.db.query(SecurityGroup).filter(
             and_(SecurityGroup.id == group_id, SecurityGroup.owner_id == user_id)
         ).first()
@@ -286,53 +247,46 @@ class FirewallService:
             raise ValueError("Security group not found")
         
         vm = self.db.query(VM).filter(
-            and_(VM.name == vm_name, VM.owner_id == user_id)
+            and_(VM.id == vm_id, VM.owner_id == user_id)
         ).first()
         
         if not vm:
             raise ValueError("VM not found")
         
-        # Check if already assigned
         existing = self.db.query(VMSecurityGroup).filter(
             and_(
-                VMSecurityGroup.vm_id == vm.id,
+                VMSecurityGroup.vm_id == vm_id,
                 VMSecurityGroup.security_group_id == group_id
             )
         ).first()
         
         if existing:
-            raise ValueError(f"Security group already assigned to VM '{vm_name}'")
+            raise ValueError("Security group already assigned to this VM")
         
-        # Assign
         assignment = VMSecurityGroup(
-            vm_id=vm.id,
+            vm_id=vm_id,
             security_group_id=group_id
         )
         self.db.add(assignment)
         self.db.commit()
         
-        # Apply ACLs to this VM
         self._apply_acls_to_vm(vm, sg)
         
-        return {
-            "success": True,
-            "message": f"Security group '{sg.name}' assigned to VM '{vm_name}'"
-        }
+        return {"success": True, "message": f"Security group assigned to VM"}
     
-    def unassign_from_vm(self, group_id: int, vm_name: str, user_id: int) -> Dict:
+    def unassign_from_vm(self, group_id: int, vm_id: int, user_id: int) -> Dict:
         """Remove security group from a VM"""
         
         vm = self.db.query(VM).filter(
-            and_(VM.name == vm_name, VM.owner_id == user_id)
+            and_(VM.id == vm_id, VM.owner_id == user_id)
         ).first()
         
         if not vm:
             raise ValueError("VM not found")
         
-        # Delete assignment
         result = self.db.query(VMSecurityGroup).filter(
             and_(
-                VMSecurityGroup.vm_id == vm.id,
+                VMSecurityGroup.vm_id == vm_id,
                 VMSecurityGroup.security_group_id == group_id
             )
         ).delete()
@@ -342,23 +296,19 @@ class FirewallService:
         
         self.db.commit()
         
-        # Remove ACLs from this VM
-        sg = self.db.query(SecurityGroup).get(group_id)
-        self._remove_acls_from_vm(vm, sg)
-        
-        return {"success": True, "message": f"Security group removed from VM '{vm_name}'"}
+        return {"success": True, "message": "Security group removed from VM"}
     
-    def list_vm_security_groups(self, vm_name: str, user_id: int) -> List[Dict]:
+    def list_vm_security_groups(self, vm_id: int, user_id: int) -> List[Dict]:
         """List security groups assigned to a VM"""
         vm = self.db.query(VM).filter(
-            and_(VM.name == vm_name, VM.owner_id == user_id)
+            and_(VM.id == vm_id, VM.owner_id == user_id)
         ).first()
         
         if not vm:
             raise ValueError("VM not found")
         
         assignments = self.db.query(VMSecurityGroup).filter(
-            VMSecurityGroup.vm_id == vm.id
+            VMSecurityGroup.vm_id == vm_id
         ).all()
         
         sgs = []
@@ -397,7 +347,7 @@ class FirewallService:
         return {"template": "web-server", "rules_added": len(added)}
     
     def apply_template_database(self, group_id: int, user_id: int, vpc_cidr: str) -> Dict:
-        """Apply database template rules (internal access only)"""
+        """Apply database template rules"""
         
         rules = [
             {"direction": "ingress", "protocol": "tcp", "port_range": "22", 
@@ -406,8 +356,6 @@ class FirewallService:
              "source_ip": vpc_cidr, "description": "MySQL from VPC"},
             {"direction": "ingress", "protocol": "tcp", "port_range": "5432", 
              "source_ip": vpc_cidr, "description": "PostgreSQL from VPC"},
-            {"direction": "ingress", "protocol": "tcp", "port_range": "6379", 
-             "source_ip": vpc_cidr, "description": "Redis from VPC"},
             {"direction": "egress", "protocol": "all", "port_range": None, 
              "source_ip": "0.0.0.0/0", "description": "Allow all outbound"},
         ]
@@ -419,73 +367,36 @@ class FirewallService:
         
         return {"template": "database", "rules_added": len(added)}
     
-    def apply_template_strict(self, group_id: int, user_id: int, allowed_ips: List[str]) -> Dict:
-        """Apply strict template - only allow from specific IPs"""
-        
-        rules = []
-        for ip in allowed_ips:
-            rules.append({
-                "direction": "ingress",
-                "protocol": "tcp",
-                "port_range": "22",
-                "source_ip": ip,
-                "description": f"SSH from {ip}"
-            })
-            rules.append({
-                "direction": "ingress",
-                "protocol": "all",
-                "port_range": None,
-                "source_ip": ip,
-                "description": f"All traffic from {ip}"
-            })
-        
-        rules.append({
-            "direction": "egress",
-            "protocol": "all",
-            "port_range": None,
-            "source_ip": "0.0.0.0/0",
-            "description": "Allow all outbound"
-        })
-        
-        added = []
-        for rule_data in rules:
-            rule = self.add_rule(group_id, user_id, **rule_data)
-            added.append(rule)
-        
-        return {"template": "strict", "rules_added": len(added)}
-    
     # ============================================
     # OVN ACL Synchronization
     # ============================================
     
     def _sync_security_group_acls(self, group_id: int):
         """Sync all rules to OVN for all VMs in this security group"""
-        sg = self.db.query(SecurityGroup).get(group_id)
-        if not sg:
-            return
-        
-        # Get all VMs with this security group
         assignments = self.db.query(VMSecurityGroup).filter(
             VMSecurityGroup.security_group_id == group_id
         ).all()
         
+        sg = self.db.query(SecurityGroup).get(group_id)
+        if not sg:
+            return
+        
         for assignment in assignments:
             vm = self.db.query(VM).get(assignment.vm_id)
-            if vm:
+            if vm and vm.vpc_id:
                 self._apply_acls_to_vm(vm, sg)
     
     def _apply_acls_to_vm(self, vm: VM, sg: SecurityGroup):
         """Apply security group rules to a specific VM"""
-        if not vm.vpc_id:
+        if not vm.vpc_id or not vm.private_ip:
             return
         
-        vpc = vm.vpc
+        vpc = self.db.query(Network).get(vm.vpc_id)
         if not vpc:
             return
         
         switch_name = f"vpc-{vpc.owner_id}-{vpc.name}".replace(' ', '-').lower()
         
-        # Get all enabled rules for this security group
         rules = self.db.query(FirewallRule).filter(
             and_(
                 FirewallRule.security_group_id == sg.id,
@@ -494,18 +405,16 @@ class FirewallService:
         ).order_by(FirewallRule.priority).all()
         
         for rule in rules:
-            self._apply_acl_rule(switch_name, vm, rule)
+            self._apply_acl_rule(switch_name, vm.private_ip, rule)
     
-    def _apply_acl_rule(self, switch_name: str, vm: VM, rule: FirewallRule):
+    def _apply_acl_rule(self, switch_name: str, vm_ip: str, rule: FirewallRule):
         """Apply a single ACL rule to OVN"""
-        
-        # Build match string
         match_parts = []
         
         if rule.direction == "ingress":
-            match_parts.append(f"ip4.dst == {vm.private_ip}")
+            match_parts.append(f"ip4.dst == {vm_ip}")
         else:
-            match_parts.append(f"ip4.src == {vm.private_ip}")
+            match_parts.append(f"ip4.src == {vm_ip}")
         
         if rule.protocol != "all":
             match_parts.append(rule.protocol)
@@ -523,28 +432,17 @@ class FirewallService:
                 match_parts.append(f"ip4.dst == {rule.source_ip}")
         
         match_str = " && ".join(match_parts)
-        
-        # Determine action
         action = "allow-related" if rule.direction == "ingress" else "allow"
-        
-        # Direction for OVN
         ovn_direction = "to-lport" if rule.direction == "ingress" else "from-lport"
         
-        # Add ACL
         try:
             self._run_ovn([
                 "ovn-nbctl", "acl-add", switch_name,
                 ovn_direction, str(rule.priority),
                 match_str, action
             ])
-        except Exception as e:
-            print(f"Failed to add ACL: {e}")
-    
-    def _remove_acls_from_vm(self, vm: VM, sg: SecurityGroup):
-        """Remove ACLs for a VM (simplified - OVN will clean up)"""
-        # OVN ACLs are tied to the switch, not individual VMs
-        # Re-sync remaining rules
-        self._sync_security_group_acls(sg.id)
+        except:
+            pass
     
     # ============================================
     # Helper Methods
@@ -567,7 +465,7 @@ class FirewallService:
             "is_default": sg.is_default,
             "vm_count": vm_count,
             "rule_count": rule_count,
-            "created_at": sg.created_at.isoformat() if sg.created_at else None
+            "created_at": sg.created_at
         }
     
     def _format_rule(self, rule: FirewallRule) -> Dict:
@@ -591,5 +489,5 @@ class FirewallService:
             "description": rule.description,
             "priority": rule.priority,
             "enabled": rule.enabled,
-            "created_at": rule.created_at.isoformat() if rule.created_at else None
+            "created_at": rule.created_at
         }

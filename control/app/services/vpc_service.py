@@ -1,4 +1,4 @@
-"""VPC Service - Complete VPC Management"""
+"""VPC Service - Virtual Private Cloud Management"""
 
 import ipaddress
 import subprocess
@@ -28,7 +28,7 @@ class VPCService:
         user_id: int,
         name: str,
         description: Optional[str] = None,
-        subnet_cidr: Optional[str] = None
+        cidr: Optional[str] = None
     ) -> Dict:
         """Create a new VPC"""
         
@@ -41,28 +41,31 @@ class VPCService:
             raise ValueError(f"VPC with name '{name}' already exists")
         
         # Allocate subnet if not provided
-        if not subnet_cidr:
-            subnet_cidr = self._allocate_subnet(user_id)
+        if not cidr:
+            cidr = self._allocate_subnet(user_id)
         
         # Parse network
-        network = ipaddress.ip_network(subnet_cidr, strict=False)
+        network = ipaddress.ip_network(cidr, strict=False)
         gateway = str(list(network.hosts())[0])
         
-        # Allocate VNI (16M possible values)
+        # Allocate VNI
         vni = self._allocate_vni()
         
         # Create OVN logical switch
         switch_name = f"vpc-{user_id}-{name}".replace(' ', '-').lower()
-        self._run_ovn(["ovn-nbctl", "ls-add", switch_name])
-        self._run_ovn(["ovn-nbctl", "set", "logical_switch", switch_name, 
-                       f"external_ids:geneve_vni={vni}"])
+        try:
+            self._run_ovn(["ovn-nbctl", "ls-add", switch_name])
+            self._run_ovn(["ovn-nbctl", "set", "logical_switch", switch_name, 
+                           f"external_ids:geneve_vni={vni}"])
+        except Exception as e:
+            raise Exception(f"Failed to create OVN switch: {str(e)}")
         
         # Create VPC in database
         vpc = Network(
             name=name,
             description=description,
             owner_id=user_id,
-            cidr=subnet_cidr,
+            cidr=cidr,
             gateway=gateway,
             vni=vni,
             is_default=False
@@ -72,7 +75,7 @@ class VPCService:
         self.db.refresh(vpc)
         
         # Create default subnet
-        self._create_default_subnet(vpc.id, subnet_cidr, gateway)
+        self._create_default_subnet(vpc.id, cidr, gateway)
         
         return self._format_vpc(vpc)
     
@@ -158,6 +161,13 @@ class VPCService:
             if subnet_network.overlaps(existing_net):
                 raise ValueError(f"Subnet overlaps with existing subnet: {existing.cidr}")
         
+        # Check name uniqueness within VPC
+        existing_name = self.db.query(Subnet).filter(
+            and_(Subnet.vpc_id == vpc_id, Subnet.name == name)
+        ).first()
+        if existing_name:
+            raise ValueError(f"Subnet with name '{name}' already exists in this VPC")
+        
         # Get gateway (first usable IP)
         hosts = list(subnet_network.hosts())
         gateway = str(hosts[0]) if hosts else None
@@ -178,7 +188,6 @@ class VPCService:
     
     def list_subnets(self, vpc_id: int, user_id: int) -> List[Dict]:
         """List all subnets in a VPC"""
-        # Verify ownership
         vpc = self.db.query(Network).filter(
             and_(Network.id == vpc_id, Network.owner_id == user_id)
         ).first()
@@ -188,6 +197,24 @@ class VPCService:
         
         subnets = self.db.query(Subnet).filter(Subnet.vpc_id == vpc_id).all()
         return [self._format_subnet(subnet) for subnet in subnets]
+    
+    def list_all_user_subnets(self, user_id: int) -> List[Dict]:
+        """List all subnets for a user across all VPCs"""
+        subnets = self.db.query(Subnet).join(Network).filter(
+            Network.owner_id == user_id
+        ).all()
+        return [self._format_subnet(subnet) for subnet in subnets]
+    
+    def get_subnet(self, subnet_id: int, user_id: int) -> Optional[Dict]:
+        """Get subnet by ID"""
+        subnet = self.db.query(Subnet).join(Network).filter(
+            and_(Subnet.id == subnet_id, Network.owner_id == user_id)
+        ).first()
+        
+        if not subnet:
+            return None
+        
+        return self._format_subnet(subnet)
     
     def delete_subnet(self, subnet_id: int, user_id: int) -> Dict:
         """Delete a subnet"""
@@ -208,6 +235,40 @@ class VPCService:
         
         return {"success": True, "message": f"Subnet '{subnet.name}' deleted"}
     
+    def get_available_ips(self, subnet_id: int, user_id: int) -> Dict:
+        """Get available IP addresses in a subnet"""
+        subnet = self.db.query(Subnet).join(Network).filter(
+            and_(Subnet.id == subnet_id, Network.owner_id == user_id)
+        ).first()
+        
+        if not subnet:
+            raise ValueError("Subnet not found")
+        
+        network = ipaddress.ip_network(subnet.cidr)
+        hosts = list(network.hosts())
+        
+        # Get used IPs
+        used_ips = set()
+        vms = self.db.query(VM).filter(VM.subnet_id == subnet_id).all()
+        for vm in vms:
+            if vm.private_ip:
+                used_ips.add(vm.private_ip)
+        
+        # Gateway is also used
+        used_ips.add(subnet.gateway)
+        
+        available = [str(ip) for ip in hosts if str(ip) not in used_ips]
+        
+        return {
+            "subnet_id": subnet_id,
+            "subnet_name": subnet.name,
+            "cidr": subnet.cidr,
+            "total_ips": len(hosts),
+            "used_ips": len(used_ips),
+            "available_ips": len(available),
+            "available_list": available[:20]
+        }
+    
     # ============================================
     # VPC Peering Operations
     # ============================================
@@ -227,6 +288,10 @@ class VPCService:
         peer_vpc = self.db.query(Network).filter(Network.id == peer_vpc_id).first()
         if not peer_vpc:
             raise ValueError("Peer VPC not found")
+        
+        # Cannot peer with itself
+        if vpc_id == peer_vpc_id:
+            raise ValueError("Cannot peer a VPC with itself")
         
         # Check if peering already exists
         existing = self.db.query(VPCPeering).filter(
@@ -274,16 +339,19 @@ class VPCService:
         patch_a = f"patch-{vpc_a.id}-to-{vpc_b.id}"
         patch_b = f"patch-{vpc_b.id}-to-{vpc_a.id}"
         
-        # Create patch ports
-        self._run_ovn(["ovn-nbctl", "lsp-add", switch_a, patch_a])
-        self._run_ovn(["ovn-nbctl", "lsp-set-addresses", patch_a, "router"])
-        self._run_ovn(["ovn-nbctl", "lsp-set-type", patch_a, "patch"])
-        self._run_ovn(["ovn-nbctl", "lsp-set-options", patch_a, f"peer={patch_b}"])
-        
-        self._run_ovn(["ovn-nbctl", "lsp-add", switch_b, patch_b])
-        self._run_ovn(["ovn-nbctl", "lsp-set-addresses", patch_b, "router"])
-        self._run_ovn(["ovn-nbctl", "lsp-set-type", patch_b, "patch"])
-        self._run_ovn(["ovn-nbctl", "lsp-set-options", patch_b, f"peer={patch_a}"])
+        try:
+            # Create patch ports
+            self._run_ovn(["ovn-nbctl", "lsp-add", switch_a, patch_a])
+            self._run_ovn(["ovn-nbctl", "lsp-set-addresses", patch_a, "router"])
+            self._run_ovn(["ovn-nbctl", "lsp-set-type", patch_a, "patch"])
+            self._run_ovn(["ovn-nbctl", "lsp-set-options", patch_a, f"peer={patch_b}"])
+            
+            self._run_ovn(["ovn-nbctl", "lsp-add", switch_b, patch_b])
+            self._run_ovn(["ovn-nbctl", "lsp-set-addresses", patch_b, "router"])
+            self._run_ovn(["ovn-nbctl", "lsp-set-type", patch_b, "patch"])
+            self._run_ovn(["ovn-nbctl", "lsp-set-options", patch_b, f"peer={patch_a}"])
+        except Exception as e:
+            raise Exception(f"Failed to create OVN patch: {str(e)}")
         
         # Update peering status
         peering.status = "active"
@@ -291,6 +359,21 @@ class VPCService:
         self.db.commit()
         
         return self._format_peering(peering)
+    
+    def list_peerings(self, vpc_id: int, user_id: int) -> List[Dict]:
+        """List all peerings for a VPC"""
+        vpc = self.db.query(Network).filter(
+            and_(Network.id == vpc_id, Network.owner_id == user_id)
+        ).first()
+        
+        if not vpc:
+            raise ValueError("VPC not found")
+        
+        peerings = self.db.query(VPCPeering).filter(
+            (VPCPeering.vpc_a_id == vpc_id) | (VPCPeering.vpc_b_id == vpc_id)
+        ).all()
+        
+        return [self._format_peering(p) for p in peerings]
     
     # ============================================
     # Helper Methods
@@ -345,7 +428,7 @@ class VPCService:
             "gateway": vpc.gateway,
             "vni": vpc.vni,
             "is_default": vpc.is_default,
-            "created_at": vpc.created_at.isoformat() if vpc.created_at else None,
+            "created_at": vpc.created_at,
             "vm_count": vm_count,
             "subnet_count": subnet_count
         }
@@ -353,19 +436,20 @@ class VPCService:
     def _format_subnet(self, subnet: Subnet) -> Dict:
         """Format subnet for API response"""
         network = ipaddress.ip_network(subnet.cidr)
-        total_ips = network.num_addresses - 2  # Exclude network and broadcast
-        used_ips = self.db.query(VM).filter(VM.subnet_id == subnet.id).count()
+        total_ips = len(list(network.hosts()))
+        used_ips = self.db.query(VM).filter(VM.subnet_id == subnet.id).count() + 1
         
         return {
             "id": subnet.id,
             "name": subnet.name,
+            "vpc_id": subnet.vpc_id,
             "cidr": subnet.cidr,
             "gateway": subnet.gateway,
             "is_public": subnet.is_public,
             "total_ips": total_ips,
             "used_ips": used_ips,
             "available_ips": total_ips - used_ips,
-            "created_at": subnet.created_at.isoformat() if subnet.created_at else None
+            "created_at": subnet.created_at
         }
     
     def _format_peering(self, peering: VPCPeering) -> Dict:
@@ -375,6 +459,10 @@ class VPCService:
             "vpc_a_id": peering.vpc_a_id,
             "vpc_b_id": peering.vpc_b_id,
             "status": peering.status,
-            "created_at": peering.created_at.isoformat() if peering.created_at else None,
-            "accepted_at": peering.accepted_at.isoformat() if peering.accepted_at else None
+            "created_at": peering.created_at,
+            "accepted_at": peering.accepted_at
         }
+
+
+# Import func for accepted_at
+from sqlalchemy.sql import func
