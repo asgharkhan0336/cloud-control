@@ -86,7 +86,7 @@ async def create_vpc(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/", response_model=List[VPCResponse])
+@router.get("/list", response_model=List[VPCResponse])
 async def list_vpcs(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
