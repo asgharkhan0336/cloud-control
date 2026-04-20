@@ -120,6 +120,7 @@ class VM(Base):
     vpc = relationship("Network", foreign_keys=[vpc_id], back_populates="vms")
     subnet = relationship("Subnet", foreign_keys=[subnet_id], back_populates="vms")
     security_groups = relationship("SecurityGroup", secondary="vm_security_groups", back_populates="vms")
+    floating_ip = relationship("FloatingIP", foreign_keys="FloatingIP.vm_id", back_populates="vm", uselist=False)
 
 # ============================================
 # VPC and Networking Models
@@ -157,6 +158,7 @@ class Subnet(Base):
     
     vpc = relationship("Network", back_populates="subnets")
     vms = relationship("VM", foreign_keys=[VM.subnet_id], back_populates="subnet")
+    floating_ips = relationship("FloatingIP", back_populates="subnet", cascade="all, delete-orphan")
     
     __table_args__ = (UniqueConstraint('vpc_id', 'name', name='uq_subnet_vpc_name'),)
 
@@ -219,3 +221,19 @@ class VPCPeering(Base):
     accepted_at = Column(DateTime(timezone=True), nullable=True)
     
     __table_args__ = (UniqueConstraint('vpc_a_id', 'vpc_b_id', name='uq_vpc_peering'),)
+
+    
+class FloatingIP(Base):
+    __tablename__ = "floating_ips"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    ip_address = Column(String(15), unique=True, nullable=False)
+    subnet_id = Column(Integer, ForeignKey("subnets.id", ondelete="CASCADE"))
+    vm_id = Column(Integer, ForeignKey("vms.id", ondelete="SET NULL"), nullable=True)
+    is_allocated = Column(Boolean, default=False)
+    allocated_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    subnet = relationship("Subnet", back_populates="floating_ips")
+    vm = relationship("VM", foreign_keys=[vm_id], back_populates="floating_ip")
