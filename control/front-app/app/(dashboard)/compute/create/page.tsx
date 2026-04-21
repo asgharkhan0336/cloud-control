@@ -14,6 +14,9 @@ import {
 import { toast } from 'react-hot-toast';
 import { apiClient } from '@/lib/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { CreateVPCModal } from '@/components/network/CreateVPCModal';
+import { CreateSecurityGroupModal } from '@/components/firewall/CreateSecurityGroupModal';
+import { CreateSSHKeyModal } from '@/components/ssh-keys/CreateSSHKeyModal';
 
 // ============================================
 // Types - Following VPC API Response Patterns
@@ -179,7 +182,9 @@ type SectionKey = 'type' | 'image' | 'networking' | 'ssh' | 'firewall' | 'name';
 export default function CreateVMPage() {
   const router = useRouter();
   const [expandedVPCs, setExpandedVPCs] = useState<number[]>([]);
-  
+  const [showCreateVPCModal, setShowCreateVPCModal] = useState(true);
+  const [showCreateSecurityGroupModal, setShowCreateSecurityGroupModal] = useState(false);
+const [showCreateSSHKeyModal, setShowCreateSSHKeyModal] = useState(false);
   // Form state
   const [config, setConfig] = useState({
     serverType: 'shared-regular' as ServerTypeKey,
@@ -193,10 +198,10 @@ export default function CreateVMPage() {
   });
 
   // API Hooks
-  const { data: vpcs, isLoading: vpcsLoading } = useVPCs();
+  const { data: vpcs, isLoading: vpcsLoading,refetch: refetchVPCs } = useVPCs();
   const { data: subnets, isLoading: subnetsLoading } = useSubnets(config.selectedVPC);
-  const { data: securityGroups, isLoading: sgLoading } = useSecurityGroups();
-  const { data: sshKeys, isLoading: sshLoading } = useSSHKeys();
+  const { data: securityGroups, isLoading: sgLoading, refetch: refetchSecurityGroups } = useSecurityGroups();
+  const { data: sshKeys, isLoading: sshLoading,refetch: refetchSSHKeys } = useSSHKeys();
   const createVM = useCreateVM();
 
   // Auto-expand selected VPC
@@ -378,7 +383,7 @@ export default function CreateVMPage() {
                   <Network className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                   <p>No VPCs available</p>
                   <button 
-                    onClick={() => router.push('/network/vpc/create')}
+                    onClick={() => setShowCreateVPCModal(true)}
                     className="mt-3 text-blue-600 hover:text-blue-700 text-sm"
                   >
                     Create a VPC
@@ -483,7 +488,16 @@ export default function CreateVMPage() {
                   <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
                 </div>
               ) : !securityGroups?.length ? (
-                <p className="text-gray-500 text-center py-4">No security groups available</p>
+                 <div className="text-center py-8 text-gray-500">
+                  <Network className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p>No security groups available</p>
+                  <button 
+                    onClick={() => setShowCreateSecurityGroupModal(true)}
+                    className="mt-3 text-blue-600 hover:text-blue-700 text-sm"
+                  >
+                    Create a Security Group
+                  </button>
+                </div>
               ) : (
                 securityGroups.map((sg) => (
                   <label key={sg.id} className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
@@ -531,7 +545,9 @@ export default function CreateVMPage() {
                 <div className="text-center py-6 text-gray-500">
                   <Key className="w-10 h-10 mx-auto mb-2 text-gray-400" />
                   <p>No SSH keys found</p>
-                  <button className="mt-2 text-blue-600 hover:text-blue-700 text-sm">
+                  <button
+                   onClick={() => setShowCreateSSHKeyModal(true)}
+                  className="mt-2 text-blue-600 hover:text-blue-700 text-sm">
                     Add SSH Key
                   </button>
                 </div>
@@ -631,6 +647,35 @@ export default function CreateVMPage() {
           </div>
         </div>
       </div>
+
+       <CreateVPCModal
+        isOpen={showCreateVPCModal}
+        onClose={() => setShowCreateVPCModal(false)}
+        onSuccess={() => {
+          // Refresh VPC list
+        //   useVPCs();
+        refetchVPCs();
+          setShowCreateVPCModal(false);
+        }}
+      />
+
+            <CreateSecurityGroupModal
+        isOpen={showCreateSecurityGroupModal}
+        onClose={() => setShowCreateSecurityGroupModal(false)}
+        onSuccess={() => {
+            refetchSecurityGroups();
+          setShowCreateSecurityGroupModal(false)
+        }}
+      />
+
+        <CreateSSHKeyModal
+        isOpen={showCreateSSHKeyModal}
+        onClose={() => setShowCreateSSHKeyModal(false)}
+        onSuccess={() => {
+          refetchSSHKeys();
+          setShowCreateSSHKeyModal(false);
+        }}
+      />
     </div>
   );
 }

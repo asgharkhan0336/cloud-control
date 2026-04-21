@@ -75,7 +75,7 @@ class VPCService:
         self.db.refresh(vpc)
         
         # Create default subnet
-        self._create_default_subnet(vpc.id, cidr, gateway)
+       #  self._create_default_subnet(vpc.id, cidr, gateway)
         
         return self._format_vpc(vpc)
     
