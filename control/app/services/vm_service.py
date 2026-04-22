@@ -272,35 +272,35 @@ def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: b
                 self.db.commit()
             return success
     
-  def delete_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-    """Delete a VM (tenant-based)"""
-    # Verify ownership
-    query = self.db.query(VM).filter(VM.id == vm_id)
-    if not is_superuser:
-        query = query.filter(VM.owner_id == user_id)
-    
-    db_vm = query.first()
-    if not db_vm:
-        raise ValueError("VM not found")
-    
-    vm_name = db_vm.name
-    
-    # Delete from libvirt
-    with LibvirtService() as libvirt:
-        try:
-            libvirt.delete_vm(vm_name)
-        except Exception as e:
-            print(f"Warning: Failed to delete VM from libvirt: {e}")
-    
-    # Delete security group associations
-    from app.models.database import VMSecurityGroup
-    self.db.query(VMSecurityGroup).filter(VMSecurityGroup.vm_id == vm_id).delete()
-    
-    # Delete from database
-    self.db.delete(db_vm)
-    self.db.commit()
-    
-    return True
+    def delete_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
+        """Delete a VM (tenant-based)"""
+        # Verify ownership
+        query = self.db.query(VM).filter(VM.id == vm_id)
+        if not is_superuser:
+            query = query.filter(VM.owner_id == user_id)
+        
+        db_vm = query.first()
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        vm_name = db_vm.name
+        
+        # Delete from libvirt
+        with LibvirtService() as libvirt:
+            try:
+                libvirt.delete_vm(vm_name)
+            except Exception as e:
+                print(f"Warning: Failed to delete VM from libvirt: {e}")
+        
+        # Delete security group associations
+        from app.models.database import VMSecurityGroup
+        self.db.query(VMSecurityGroup).filter(VMSecurityGroup.vm_id == vm_id).delete()
+        
+        # Delete from database
+        self.db.delete(db_vm)
+        self.db.commit()
+        
+        return True
     
     def assign_floating_ip(self, vm_id: int, floating_ip: str, user_id: int, is_superuser: bool = False) -> bool:
         """Assign floating IP to VM"""
