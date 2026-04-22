@@ -108,7 +108,7 @@ class VMService:
         if not vm_name:
             raise ValueError("VM name is required")
         
-        # Check if VM already exists
+        # Check if VM already exists in database
         existing = self.db.query(VM).filter(VM.name == vm_name).first()
         if existing:
             raise ValueError(f"VM with name '{vm_name}' already exists")
@@ -118,6 +118,7 @@ class VMService:
         subnet_id = kwargs.get('subnet_id')
         vpc = None
         subnet = None
+        private_ip = kwargs.get('private_ip')
         
         if vpc_id:
             vpc = self.db.query(Network).filter(
@@ -134,6 +135,10 @@ class VMService:
             ).first()
             if not subnet:
                 raise ValueError("Subnet not found or not in selected VPC")
+            
+            # Allocate private IP if subnet is selected but no IP provided
+            if not private_ip:
+                private_ip = self._allocate_ip_from_subnet(subnet_id, user_id)
         
         # Prepare libvirt parameters
         libvirt_params = {
@@ -142,7 +147,7 @@ class VMService:
             'vcpus': kwargs.get('vcpus', 2),
             'disk_size': kwargs.get('disk_size', 20),
             'os_variant': kwargs.get('os_variant', 'ubuntu24.04'),
-            'network_bridge': kwargs.get('network_bridge', 'br-int')
+            'network_bridge': kwargs.get('network_bridge', 'virbr0')  # Default to virbr0
         }
         
         if kwargs.get('ssh_key'):
@@ -155,11 +160,6 @@ class VMService:
             success = libvirt.create_vm(**libvirt_params)
             if not success:
                 raise Exception("Failed to create VM in libvirt")
-        
-        # Allocate private IP if subnet is selected
-        private_ip = kwargs.get('private_ip')
-        if subnet and not private_ip:
-            private_ip = self._allocate_ip_from_subnet(subnet_id, user_id)
         
         # Save VM to database
         db_vm = VM(
@@ -179,28 +179,23 @@ class VMService:
         self.db.commit()
         self.db.refresh(db_vm)
         
-        # Create OVN port if VPC is selected
-        if vpc and subnet and private_ip:
+        # Create OVN port if VPC is selected (only if not using default virbr0)
+        if vpc and subnet and private_ip and libvirt_params['network_bridge'] != 'virbr0':
             try:
                 tenant_name = self._get_tenant_name(user_id)
                 self.ovn.create_vm_port(
                     tenant_name=tenant_name,
                     vm_name=vm_name,
-                    private_ip=private_ip,
-                    vni=vpc.vni
+                    private_ip=private_ip
                 )
             except Exception as e:
                 print(f"Warning: Failed to create OVN port: {e}")
+                # Don't fail VM creation if OVN port fails
         
         # Attach security groups
         security_group_ids = kwargs.get('security_group_ids', [])
         if security_group_ids:
             self._attach_security_groups(db_vm.id, security_group_ids, user_id)
-        
-        # Attach SSH keys (store association)
-        ssh_key_ids = kwargs.get('ssh_key_ids', [])
-        if ssh_key_ids:
-            self._attach_ssh_keys(db_vm.id, ssh_key_ids, user_id)
         
         return self._merge_vm_data({
             'name': vm_name,

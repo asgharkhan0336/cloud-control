@@ -74,33 +74,32 @@ class OVNService:
             "dhcp_uuid": dhcp_uuid
         }
     
-    def create_vm_port(self, tenant_name: str, vm_name: str, 
-                       private_ip: str) -> Dict:
-        """Create port for VM with specific IP"""
-        
-        switch_name = f"tenant-{tenant_name}"
-        port_name = f"port-{vm_name}"
-        
-        # Generate MAC
-        mac = f"02:00:00:{random.randint(0,255):02x}:{random.randint(0,255):02x}:{random.randint(0,255):02x}"
-        
-        # Create port
-        self._run(["ovn-nbctl", "lsp-add", switch_name, port_name])
-        
-        # Set static IP
-        self._run(["ovn-nbctl", "lsp-set-addresses", port_name, f"{mac} {private_ip}"])
-        self._run(["ovn-nbctl", "lsp-set-port-security", port_name, f"{mac} {private_ip}"])
-        
-        # Get port UUID
-        port_uuid = self._run(["ovn-nbctl", "get", "logical_switch_port",
-                               port_name, "_uuid"])
-        
-        return {
-            "port_name": port_name,
-            "port_uuid": port_uuid,
-            "mac_address": mac,
-            "private_ip": private_ip
-        }
+def create_vm_port(self, tenant_name: str, vm_name: str, private_ip: str) -> Dict:
+    """Create port for VM with specific IP"""
+    
+    switch_name = f"vpc-{tenant_name}"
+    port_name = f"port-{vm_name}"
+    
+    # Generate MAC
+    import random
+    mac = f"02:00:00:{random.randint(0,255):02x}:{random.randint(0,255):02x}:{random.randint(0,255):02x}"
+    
+    # Create port
+    self._run(["ovn-nbctl", "lsp-add", switch_name, port_name])
+    
+    # Set static IP
+    self._run(["ovn-nbctl", "lsp-set-addresses", port_name, f"{mac} {private_ip}"])
+    self._run(["ovn-nbctl", "lsp-set-port-security", port_name, f"{mac} {private_ip}"])
+    
+    # Get port UUID
+    port_uuid = self._run(["ovn-nbctl", "get", "logical_switch_port", port_name, "_uuid"])
+    
+    return {
+        "port_name": port_name,
+        "port_uuid": port_uuid,
+        "mac_address": mac,
+        "private_ip": private_ip
+    }
     
     def assign_floating_ip(self, tenant_name: str, vm_name: str,
                            floating_ip: str, private_ip: str) -> Dict:
