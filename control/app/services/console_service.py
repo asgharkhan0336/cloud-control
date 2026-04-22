@@ -9,20 +9,16 @@ from sqlalchemy.orm import Session
 
 from app.services.libvirt_service import LibvirtService
 from app.models.database import VM
-
+from app.config import settings
 
 class ConsoleService:
-    def __init__(self, db: Session):
+     def __init__(self, db: Session):
         self.db = db
         # Connect to Redis
-        redis_host = os.getenv('REDIS_HOST', 'localhost')
-        redis_port = int(os.getenv('REDIS_PORT', 6379))
-        redis_db = int(os.getenv('REDIS_DB', 0))
-        
         self.redis = redis.Redis(
-            host=redis_host,
-            port=redis_port,
-            db=redis_db,
+            host=settings.REDIS_HOST if hasattr(settings, 'REDIS_HOST') else 'localhost',
+            port=int(os.getenv('REDIS_PORT', 6379)) if hasattr(settings, 'REDIS_PORT') else 6379,
+            db=int(os.getenv('REDIS_DB', 0)) if hasattr(settings, 'REDIS_DB') else 0,
             decode_responses=True
         )
     
@@ -33,7 +29,7 @@ class ConsoleService:
             VM.owner_id == user_id
         ).first()
     
-    def create_console_session(self, vm_id: int, user_id: int) -> Dict[str, Any]:
+  def create_console_session(self, vm_id: int, user_id: int) -> Dict[str, Any]:
         """Create a one-time console session with random UUID token"""
         db_vm = self._get_authorized_vm(vm_id, user_id)
         if not db_vm:
@@ -60,8 +56,8 @@ class ConsoleService:
         self.redis.hset(session_key, mapping=session_data)
         self.redis.expire(session_key, 300)  # 5 minutes
         
-        # Return WebSocket URL with token in path
-        console_host = os.getenv('CONSOLE_HOST', 'localhost:8000')
+        # Use settings.console_host
+        console_host = settings.console_host
         
         return {
             'url': f"ws://{console_host}/console/{token}",
