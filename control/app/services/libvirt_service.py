@@ -235,7 +235,7 @@ class LibvirtService:
                 '--vcpus', str(vcpus),
                 '--disk', f"path={disk_path},format=qcow2,bus=virtio",
                 '--network', f"bridge={network_bridge},model=virtio",
-                '--graphics', 'none',
+                '--graphics', 'vnc,listen=0.0.0.0',
                 '--os-variant', os_variant,
                 '--import',
                 '--noautoconsole'
