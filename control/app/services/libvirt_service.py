@@ -308,3 +308,49 @@ class LibvirtService:
             return True
         except libvirt.libvirtError as e:
             raise Exception(f"Failed to delete VM: {e}")
+
+def reboot_vm(self, name: str) -> bool:
+    """Reboot a VM"""
+    try:
+        domain = self.conn.lookupByName(name)
+        domain.reboot()
+        return True
+    except libvirt.libvirtError as e:
+        raise Exception(f"Failed to reboot VM: {e}")
+
+def pause_vm(self, name: str) -> bool:
+    """Pause a VM"""
+    try:
+        domain = self.conn.lookupByName(name)
+        domain.suspend()
+        return True
+    except libvirt.libvirtError as e:
+        raise Exception(f"Failed to pause VM: {e}")
+
+def resume_vm(self, name: str) -> bool:
+    """Resume a paused VM"""
+    try:
+        domain = self.conn.lookupByName(name)
+        domain.resume()
+        return True
+    except libvirt.libvirtError as e:
+        raise Exception(f"Failed to resume VM: {e}")
+
+def get_console_url(self, name: str) -> Dict[str, Any]:
+    """Get VNC/SPICE console URL"""
+    try:
+        domain = self.conn.lookupByName(name)
+        xml_desc = domain.XMLDesc()
+        root = ET.fromstring(xml_desc)
+        
+        graphics = root.find('.//graphics')
+        if graphics is not None:
+            return {
+                'type': graphics.get('type', 'vnc'),
+                'port': graphics.get('port'),
+                'listen': graphics.get('listen', '0.0.0.0'),
+                'password': graphics.get('passwd')
+            }
+        return {'type': 'none', 'url': None}
+    except:
+        return {'type': 'none', 'url': None}
