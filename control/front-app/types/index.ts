@@ -9,6 +9,7 @@ export interface User {
 }
 
 export interface VM {
+  id: string;
   name: string;
   state: 'running' | 'stopped' | 'paused';
   memory: number;

@@ -387,7 +387,9 @@ const handleVPCCreate = async () => {
     setCreatedVPC(vpc);
     
     // Fetch existing subnets for this VPC (should be empty for new VPC)
-    await fetchExistingSubnets(vpc.id);
+    setTimeout(() => {
+      fetchExistingSubnets(vpc.id);
+    }, 1000);
     
     toast.success('VPC created successfully!');
     setStep('subnet');

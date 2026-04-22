@@ -105,7 +105,7 @@ const useSubnets = (vpcId: number | null) => {
     queryKey: ['subnets', vpcId],
     queryFn: async () => {
       if (!vpcId) return [];
-      const response = await apiClient.get<SubnetResponse[]>(`/vpc/${vpcId}/subnets`);
+      const response = await apiClient.get<SubnetResponse[]>(`/subnets?vpc_id=${vpcId}`);
       return response;
     },
     enabled: !!vpcId,
@@ -197,24 +197,37 @@ const [showCreateSSHKeyModal, setShowCreateSSHKeyModal] = useState(false);
     userData: '',
   });
 
+  const [serverName, setServerName] = useState('');
+
   // API Hooks
   const { data: vpcs, isLoading: vpcsLoading,refetch: refetchVPCs } = useVPCs();
-  const { data: subnets, isLoading: subnetsLoading } = useSubnets(config.selectedVPC);
+  const { data: subnets, isLoading: subnetsLoading,refetch: refetchSubnets } = useSubnets(config.selectedVPC);
   const { data: securityGroups, isLoading: sgLoading, refetch: refetchSecurityGroups } = useSecurityGroups();
   const { data: sshKeys, isLoading: sshLoading,refetch: refetchSSHKeys } = useSSHKeys();
   const createVM = useCreateVM();
 
   // Auto-expand selected VPC
-  useEffect(() => {
-    if (config.selectedVPC && !expandedVPCs.includes(config.selectedVPC)) {
-      setExpandedVPCs(prev => [...prev, config.selectedVPC]);
-    }
-  }, [config.selectedVPC]);
+// Auto-fetch subnets when VPC is selected
+useEffect(() => {
+  const vpcId = config.selectedVPC;
+  
+  if (vpcId === null) return;
+  
+  // Auto-expand the selected VPC
+  setExpandedVPCs(prev => 
+    prev.includes(vpcId) ? prev : [...prev, vpcId]
+  );
+  
+  // Fetch subnets
+  refetchSubnets();
+}, [config.selectedVPC]);
 
   const toggleVPC = (vpcId: number) => {
-    setExpandedVPCs(prev => 
+    setExpandedVPCs(prev =>
       prev.includes(vpcId) ? prev.filter(id => id !== vpcId) : [...prev, vpcId]
     );
+    selectVPC(vpcId);
+
   };
 
   const selectVPC = (vpcId: number) => {
@@ -224,6 +237,7 @@ const [showCreateSSHKeyModal, setShowCreateSSHKeyModal] = useState(false);
       selectedSubnet: null // Reset subnet when VPC changes
     });
   };
+
 
   const isSectionComplete = (sectionId: SectionKey): boolean => {
     switch(sectionId) {
@@ -583,38 +597,70 @@ const [showCreateSSHKeyModal, setShowCreateSSHKeyModal] = useState(false);
           </SectionCard>
 
           {/* Server Name Section */}
-          <SectionCard id="name" title="Server Name" icon={Tag}>
-            <input
-              type="text"
-              value={config.name}
-              onChange={(e) => setConfig({ ...config, name: e.target.value })}
-              placeholder="e.g., prod-web-01"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            
-            <div className="mt-6 flex justify-end gap-3">
-              <button
-                onClick={() => router.back()}
-                className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateServer}
-                disabled={!config.name || !config.selectedVPC || createVM.isPending}
-                className="px-8 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {createVM.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  'Create Server'
-                )}
-              </button>
-            </div>
-          </SectionCard>
+      {/* Server Name Section - Standalone without SectionCard */}
+<div className="bg-white border border-gray-200 rounded-xl mb-4 overflow-hidden">
+  <div className="px-6 py-5 border-b border-gray-100 bg-white">
+    <div className="flex items-center gap-3">
+      <Tag size={20} className="text-gray-500" />
+      <h2 className="text-lg font-semibold text-gray-900">Server Name</h2>
+    </div>
+  </div>
+  
+  <div className="p-6">
+    {/* Name Input */}
+    <div className="mb-6">
+      <label className="block text-sm font-medium text-gray-700 mb-2">
+        Server Name <span className="text-red-500">*</span>
+      </label>
+      <input
+        type="text"
+        value={config.name}
+        onChange={(e) => {
+          const newName = e.target.value;
+          setConfig(prev => ({ ...prev, name: newName }));
+        }}
+        placeholder="e.g., prod-web-01"
+        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {config.name && config.name.length < 3 && (
+        <p className="mt-1 text-sm text-amber-600">
+          Name should be at least 3 characters
+        </p>
+      )}
+      <p className="mt-1 text-xs text-gray-500">
+        Use lowercase letters, numbers, and hyphens only
+      </p>
+    </div>
+
+    {/* Action Buttons */}
+    <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
+      <button
+        type="button"
+        onClick={() => router.back()}
+        className="px-6 py-2.5 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={handleCreateServer}
+        disabled={!config.name || !config.selectedVPC || createVM.isPending}
+        className="px-8 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+      >
+        {createVM.isPending ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>Creating Server...</span>
+          </>
+        ) : (
+          <span>Create Server</span>
+        )}
+      </button>
+    </div>
+  </div>
+</div>
         </div>
 
         {/* Right Sidebar - Summary */}
