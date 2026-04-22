@@ -9,6 +9,7 @@ from app.auth.auth import get_current_active_user
 from app.models.database import User
 from app.models.vm import VMCreateRequest, VMResponse, VMListResponse, APIResponse
 from app.services.vm_service import VMService
+from app.services.console_service import ConsoleService
 
 router = APIRouter(prefix="/api/v1/vms", tags=["VMs"])
 
@@ -157,3 +158,18 @@ async def delete_vm(
         return APIResponse(success=True, message="VM deleted")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/{vm_id}/console")
+async def request_console(
+    vm_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Request console access - returns one-time URL"""
+    service = ConsoleService(db)
+    session = service.create_console_session(vm_id, current_user.id)
+    
+    return {
+        'url': session['url'],
+        'expires_in': session['expires_in']
+    }
