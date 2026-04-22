@@ -4,6 +4,7 @@ import subprocess
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
+from app.models.database import FirewallRule
 
 from app.models.database import SecurityGroup, FirewallRule, VM, User, VMSecurityGroup, Network
 
@@ -491,3 +492,29 @@ class FirewallService:
             "enabled": rule.enabled,
             "created_at": rule.created_at
         }
+
+        def _sync_vm_acls(self, vm_id: int):
+    """Sync firewall rules for a specific VM"""
+    vm = self.db.query(VM).get(vm_id)
+    if not vm or not vm.vpc_id or not vm.private_ip:
+        return
+    
+    vpc = self.db.query(Network).get(vm.vpc_id)
+    if not vpc:
+        return
+    
+    # Get all security groups attached to this VM
+    assignments = self.db.query(VMSecurityGroup).filter(
+        VMSecurityGroup.vm_id == vm_id
+    ).all()
+    
+    switch_name = f"vpc-{vpc.owner_id}-{vpc.name}".replace(' ', '-').lower()
+    
+    # First, remove existing ACLs for this VM (by IP)
+    self._remove_vm_acls(switch_name, vm.private_ip)
+    
+    # Apply rules from each security group
+    for assignment in assignments:
+        sg = self.db.query(SecurityGroup).get(assignment.security_group_id)
+        if sg:
+            self._apply_acls_to_vm(vm, sg)
