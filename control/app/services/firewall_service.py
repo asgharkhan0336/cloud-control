@@ -493,28 +493,91 @@ class FirewallService:
             "created_at": rule.created_at
         }
 
-        def _sync_vm_acls(self, vm_id: int):
-    """Sync firewall rules for a specific VM"""
-    vm = self.db.query(VM).get(vm_id)
-    if not vm or not vm.vpc_id or not vm.private_ip:
-        return
-    
-    vpc = self.db.query(Network).get(vm.vpc_id)
-    if not vpc:
-        return
-    
-    # Get all security groups attached to this VM
-    assignments = self.db.query(VMSecurityGroup).filter(
-        VMSecurityGroup.vm_id == vm_id
-    ).all()
-    
-    switch_name = f"vpc-{vpc.owner_id}-{vpc.name}".replace(' ', '-').lower()
-    
-    # First, remove existing ACLs for this VM (by IP)
-    self._remove_vm_acls(switch_name, vm.private_ip)
-    
-    # Apply rules from each security group
-    for assignment in assignments:
-        sg = self.db.query(SecurityGroup).get(assignment.security_group_id)
-        if sg:
-            self._apply_acls_to_vm(vm, sg)
+    def _sync_vm_acls(self, vm_id: int):
+        """Sync firewall rules for a specific VM"""
+        from app.models.database import VM, Network, VMSecurityGroup, SecurityGroup
+        
+        vm = self.db.query(VM).get(vm_id)
+        if not vm or not vm.vpc_id or not vm.private_ip:
+            return
+        
+        vpc = self.db.query(Network).get(vm.vpc_id)
+        if not vpc:
+            return
+        
+        assignments = self.db.query(VMSecurityGroup).filter(
+            VMSecurityGroup.vm_id == vm_id
+        ).all()
+        
+        switch_name = f"vpc-{vpc.owner_id}-{vpc.name}".replace(' ', '-').lower()
+        
+        for assignment in assignments:
+            sg = self.db.query(SecurityGroup).get(assignment.security_group_id)
+            if sg:
+                rules = self.db.query(FirewallRule).filter(
+                    FirewallRule.security_group_id == sg.id,
+                    FirewallRule.enabled == True
+                ).all()
+                
+                for rule in rules:
+                    self._apply_single_acl(switch_name, vm.private_ip, rule)
+
+
+    def _apply_single_acl(self, switch_name: str, vm_ip: str, rule):
+        """Apply a single ACL rule"""
+        match_parts = []
+        
+        if rule.direction == "ingress":
+            match_parts.append(f"ip4.dst == {vm_ip}")
+        else:
+            match_parts.append(f"ip4.src == {vm_ip}")
+        
+        if rule.protocol != "all":
+            match_parts.append(rule.protocol)
+        
+        if rule.port_min:
+            if rule.port_min == rule.port_max:
+                match_parts.append(f"{rule.protocol}.dst == {rule.port_min}")
+            else:
+                match_parts.append(f"{rule.port_min} <= {rule.protocol}.dst <= {rule.port_max}")
+        
+        if rule.source_ip != "0.0.0.0/0":
+            if rule.direction == "ingress":
+                match_parts.append(f"ip4.src == {rule.source_ip}")
+            else:
+                match_parts.append(f"ip4.dst == {rule.source_ip}")
+        
+        match_str = " && ".join(match_parts)
+        action = "allow-related" if rule.direction == "ingress" else "allow"
+        ovn_direction = "to-lport" if rule.direction == "ingress" else "from-lport"
+        
+        try:
+            self._run_ovn([
+                "ovn-nbctl", "acl-add", switch_name,
+                ovn_direction, str(rule.priority),
+                match_str, action
+            ])
+        except Exception as e:
+            print(f"Warning: Failed to add ACL: {e}")
+
+
+    def _remove_vm_acls(self, switch_name: str, vm_ip: str):
+        """Remove all ACLs for a specific VM IP"""
+        try:
+            acls = self._run_ovn(["ovn-nbctl", "acl-list", switch_name])
+            
+            for line in acls.split('\n'):
+                if vm_ip in line:
+                    parts = line.split()
+                    if parts:
+                        acl_uuid = parts[0]
+                        try:
+                            self._run_ovn(["ovn-nbctl", "acl-del", switch_name, "to-lport", acl_uuid])
+                        except:
+                            pass
+                        try:
+                            self._run_ovn(["ovn-nbctl", "acl-del", switch_name, "from-lport", acl_uuid])
+                        except:
+                            pass
+        except Exception as e:
+            print(f"Warning: Failed to remove ACLs: {e}")
