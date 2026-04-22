@@ -182,7 +182,7 @@ type SectionKey = 'type' | 'image' | 'networking' | 'ssh' | 'firewall' | 'name';
 export default function CreateVMPage() {
   const router = useRouter();
   const [expandedVPCs, setExpandedVPCs] = useState<number[]>([]);
-  const [showCreateVPCModal, setShowCreateVPCModal] = useState(true);
+  const [showCreateVPCModal, setShowCreateVPCModal] = useState(false);
   const [showCreateSecurityGroupModal, setShowCreateSecurityGroupModal] = useState(false);
 const [showCreateSSHKeyModal, setShowCreateSSHKeyModal] = useState(false);
   // Form state

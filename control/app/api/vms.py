@@ -46,20 +46,32 @@ async def create_vm(
     """Create a new VM"""
     try:
         service = VMService(db)
-        vm = service.create_vm(
-            user_id=current_user.id,
-            name=vm_request.name,
-            memory=vm_request.memory,
-            vcpus=vm_request.vcpus,
-            disk_size=vm_request.disk_size,
-            os_variant=vm_request.os_variant,
-            vpc_id=vm_request.vpc_id,
-            subnet_id=vm_request.subnet_id,
-            security_group_ids=vm_request.security_group_ids
-        )
-        return APIResponse(success=True, message="VM created", data=vm)
+        
+        # Build kwargs for service
+        kwargs = {
+            'name': vm_request.name,
+            'memory': vm_request.memory,
+            'vcpus': vm_request.vcpus,
+            'disk_size': vm_request.disk_size,
+            'os_variant': vm_request.os_variant,
+            'network_bridge': vm_request.network_bridge,
+            'vpc_id': vm_request.vpc_id,
+            'subnet_id': vm_request.subnet_id,
+            'private_ip': vm_request.private_ip,
+            'security_group_ids': vm_request.security_group_ids,
+            'ssh_key': vm_request.ssh_key,
+            'user_data': vm_request.user_data,
+        }
+        
+        # Remove None values
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        
+        vm = service.create_vm(user_id=current_user.id, **kwargs)
+        return APIResponse(success=True, message="VM created successfully", data=vm)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{vm_id}/start", response_model=APIResponse)
 async def start_vm(
