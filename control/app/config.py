@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # Network Settings
     vm_ip_pool_start: str = "192.168.122.100"
     vm_ip_pool_end: str = "192.168.122.200"
+
+        # Redis Settings
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    # Console Settings
     console_host:str = "49.12.132.53:8000"
     class Config:
         env_file = ".env"
