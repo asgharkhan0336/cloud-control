@@ -337,7 +337,9 @@ def resume_vm(self, name: str) -> bool:
         raise Exception(f"Failed to resume VM: {e}")
 
 def get_console_url(self, name: str) -> Dict[str, Any]:
-    """Get VNC/SPICE console URL"""
+    """Get VNC/SPICE console connection info"""
+    import xml.etree.ElementTree as ET
+    
     try:
         domain = self.conn.lookupByName(name)
         xml_desc = domain.XMLDesc()
@@ -347,10 +349,25 @@ def get_console_url(self, name: str) -> Dict[str, Any]:
         if graphics is not None:
             return {
                 'type': graphics.get('type', 'vnc'),
-                'port': graphics.get('port'),
+                'port': graphics.get('port', '5900'),
                 'listen': graphics.get('listen', '0.0.0.0'),
-                'password': graphics.get('passwd')
+                'password': graphics.get('passwd'),
+                'websocket': graphics.get('websocket')
             }
-        return {'type': 'none', 'url': None}
-    except:
-        return {'type': 'none', 'url': None}
+        
+        # Check for SPICE
+        spice = root.find('.//channel[@type="spicevmc"]')
+        if spice is not None:
+            graphics = root.find('.//graphics[@type="spice"]')
+            if graphics is not None:
+                return {
+                    'type': 'spice',
+                    'port': graphics.get('port', '5900'),
+                    'listen': graphics.get('listen', '0.0.0.0'),
+                    'password': graphics.get('passwd')
+                }
+        
+        return {'type': 'none', 'port': '5900'}
+    except Exception as e:
+        print(f"Error getting console URL: {e}")
+        return {'type': 'none', 'port': '5900'}
