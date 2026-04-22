@@ -1,37 +1,38 @@
-"""VM Service - Tenant-based VM Management"""
+"""VM Service - Complete Tenant-based VM Management"""
 
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from app.services.libvirt_service import LibvirtService
+from app.services.ovn_service import OVNService
 from app.models.vm import VMResponse, VMListResponse
-from app.models.database import VM, Network, Subnet, SecurityGroup
+from app.models.database import VM, Network, Subnet, SecurityGroup, VMSecurityGroup
 
 class VMService:
     def __init__(self, db: Session):
         self.db = db
+        self.ovn = OVNService()
+    
+    # ============================================
+    # VM Listing and Retrieval
+    # ============================================
     
     def list_vms(self, user_id: int, is_superuser: bool = False) -> VMListResponse:
         """List all VMs for current user"""
         with LibvirtService() as libvirt:
-            # Get all VMs from libvirt
             libvirt_vms = libvirt.list_vms()
             
-            # Get user's VMs from database
             if is_superuser:
                 db_vms = self.db.query(VM).all()
             else:
                 db_vms = self.db.query(VM).filter(VM.owner_id == user_id).all()
             
-            # Create mapping of VM name to database VM
             db_vm_map = {vm.name: vm for vm in db_vms}
             
-            # Filter and merge VMs
             user_vms = []
             for libvirt_vm in libvirt_vms:
                 vm_name = libvirt_vm['name']
                 db_vm = db_vm_map.get(vm_name)
                 
-                # Only include VMs that belong to the user (or all if superuser)
                 if db_vm or is_superuser:
                     vm_data = self._merge_vm_data(libvirt_vm, db_vm)
                     user_vms.append(vm_data)
@@ -47,7 +48,6 @@ class VMService:
     
     def get_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> Optional[Dict[str, Any]]:
         """Get specific VM by ID (tenant-based)"""
-        # Query database first
         query = self.db.query(VM).filter(VM.id == vm_id)
         if not is_superuser:
             query = query.filter(VM.owner_id == user_id)
@@ -56,11 +56,9 @@ class VMService:
         if not db_vm:
             return None
         
-        # Get VM info from libvirt
         with LibvirtService() as libvirt:
             libvirt_vm = libvirt.get_vm(db_vm.name)
             if not libvirt_vm:
-                # VM exists in DB but not in libvirt (orphaned record)
                 return self._merge_vm_data({
                     'name': db_vm.name,
                     'state': 'unknown',
@@ -100,151 +98,169 @@ class VMService:
             
             return self._merge_vm_data(libvirt_vm, db_vm)
     
-def create_vm(self, user_id: int, **kwargs) -> Dict[str, Any]:
-    """Create a new VM for a user"""
-    vm_name = kwargs.get('name')
-    if not vm_name:
-        raise ValueError("VM name is required")
+    # ============================================
+    # VM Creation
+    # ============================================
     
-    # Check if VM already exists in database
-    existing = self.db.query(VM).filter(VM.name == vm_name).first()
-    if existing:
-        raise ValueError(f"VM with name '{vm_name}' already exists")
-    
-    # Separate libvirt params from database params
-    libvirt_params = {
-        'name': vm_name,
-        'memory': kwargs.get('memory', 1024),
-        'vcpus': kwargs.get('vcpus', 1),
-        'disk_size': kwargs.get('disk_size', 10),
-        'os_variant': kwargs.get('os_variant', 'ubuntu24.04'),
-        'network_bridge': kwargs.get('network_bridge', 'virbr0')
-    }
-    
-    # Add optional libvirt params if present
-    if kwargs.get('ssh_key'):
-        libvirt_params['ssh_key'] = kwargs['ssh_key']
-    if kwargs.get('user_data'):
-        libvirt_params['user_data'] = kwargs['user_data']
-    
-    # Create VM in libvirt
-    with LibvirtService() as libvirt:
-        success = libvirt.create_vm(**libvirt_params)
-        if not success:
-            raise Exception("Failed to create VM in libvirt")
-    
-    # Save to database with additional fields
-    db_vm = VM(
-        name=vm_name,
-        owner_id=user_id,
-        memory=libvirt_params['memory'],
-        vcpus=libvirt_params['vcpus'],
-        disk_size=libvirt_params['disk_size'],
-        os_variant=libvirt_params['os_variant'],
-        status='stopped',
-        vpc_id=kwargs.get('vpc_id'),
-        subnet_id=kwargs.get('subnet_id'),
-        private_ip=kwargs.get('private_ip'),
-        network_name=libvirt_params['network_bridge']
-    )
-    self.db.add(db_vm)
-    self.db.commit()
-    self.db.refresh(db_vm)
-    
-    # Assign security groups if provided
-    if kwargs.get('security_group_ids'):
-        from app.models.database import SecurityGroup, VMSecurityGroup
-        for sg_id in kwargs['security_group_ids']:
-            sg = self.db.query(SecurityGroup).filter(
-                SecurityGroup.id == sg_id,
-                SecurityGroup.owner_id == user_id
-            ).first()
-            if sg:
-                vm_sg = VMSecurityGroup(vm_id=db_vm.id, security_group_id=sg_id)
-                self.db.add(vm_sg)
-        self.db.commit()
-    
-    # If VPC and subnet are provided, allocate private IP
-    if kwargs.get('vpc_id') and kwargs.get('subnet_id') and not kwargs.get('private_ip'):
-        from app.services.vpc_service import VPCService
-        vpc_service = VPCService(self.db)
-        available_ips = vpc_service.get_available_ips(kwargs['subnet_id'], user_id)
-        if available_ips and available_ips.get('available_list'):
-            db_vm.private_ip = available_ips['available_list'][0]
-            self.db.commit()
-    
-    return self._merge_vm_data({
-        'name': vm_name,
-        'state': 'stopped',
-        'memory': db_vm.memory,
-        'vcpus': db_vm.vcpus,
-        'cpu_time': 0,
-        'cpu_percent': 0.0,
-        'ip_addresses': [db_vm.private_ip] if db_vm.private_ip else [],
-        'disk_usage': {}
-    }, db_vm)
-
-    
-def start_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-    """Start a VM (tenant-based)"""
-    # Verify ownership
-    query = self.db.query(VM).filter(VM.id == vm_id)
-    if not is_superuser:
-        query = query.filter(VM.owner_id == user_id)
-    
-    db_vm = query.first()
-    if not db_vm:
-        raise ValueError("VM not found")
-    
-    # Start in libvirt
-    with LibvirtService() as libvirt:
-        success = libvirt.start_vm(db_vm.name)
-        if success:
-            db_vm.status = 'running'
-            self.db.commit()
-        return success
-    
-def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: bool = False) -> bool:
-    """Stop a VM (tenant-based)"""
-    # Verify ownership
-    query = self.db.query(VM).filter(VM.id == vm_id)
-    if not is_superuser:
-        query = query.filter(VM.owner_id == user_id)
-    
-    db_vm = query.first()
-    if not db_vm:
-        raise ValueError("VM not found")
-    
-    # Stop in libvirt
-    with LibvirtService() as libvirt:
-        success = libvirt.stop_vm(db_vm.name, force)
-        if success:
-            db_vm.status = 'stopped'
-            self.db.commit()
-        return success
-    
-    def reboot_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-        """Reboot a VM (tenant-based)"""
-        # Verify ownership
-        query = self.db.query(VM).filter(VM.id == vm_id)
-        if not is_superuser:
-            query = query.filter(VM.owner_id == user_id)
+    def create_vm(self, user_id: int, **kwargs) -> Dict[str, Any]:
+        """Create a new VM with network and security group attachment"""
+        vm_name = kwargs.get('name')
+        if not vm_name:
+            raise ValueError("VM name is required")
         
-        db_vm = query.first()
+        # Check if VM already exists
+        existing = self.db.query(VM).filter(VM.name == vm_name).first()
+        if existing:
+            raise ValueError(f"VM with name '{vm_name}' already exists")
+        
+        # Verify VPC and subnet ownership if provided
+        vpc_id = kwargs.get('vpc_id')
+        subnet_id = kwargs.get('subnet_id')
+        vpc = None
+        subnet = None
+        
+        if vpc_id:
+            vpc = self.db.query(Network).filter(
+                Network.id == vpc_id,
+                Network.owner_id == user_id
+            ).first()
+            if not vpc:
+                raise ValueError("VPC not found or access denied")
+        
+        if subnet_id:
+            subnet = self.db.query(Subnet).filter(
+                Subnet.id == subnet_id,
+                Subnet.vpc_id == vpc_id
+            ).first()
+            if not subnet:
+                raise ValueError("Subnet not found or not in selected VPC")
+        
+        # Prepare libvirt parameters
+        libvirt_params = {
+            'name': vm_name,
+            'memory': kwargs.get('memory', 2048),
+            'vcpus': kwargs.get('vcpus', 2),
+            'disk_size': kwargs.get('disk_size', 20),
+            'os_variant': kwargs.get('os_variant', 'ubuntu24.04'),
+            'network_bridge': kwargs.get('network_bridge', 'br-int')
+        }
+        
+        if kwargs.get('ssh_key'):
+            libvirt_params['ssh_key'] = kwargs['ssh_key']
+        if kwargs.get('user_data'):
+            libvirt_params['user_data'] = kwargs['user_data']
+        
+        # Create VM in libvirt
+        with LibvirtService() as libvirt:
+            success = libvirt.create_vm(**libvirt_params)
+            if not success:
+                raise Exception("Failed to create VM in libvirt")
+        
+        # Allocate private IP if subnet is selected
+        private_ip = kwargs.get('private_ip')
+        if subnet and not private_ip:
+            private_ip = self._allocate_ip_from_subnet(subnet_id, user_id)
+        
+        # Save VM to database
+        db_vm = VM(
+            name=vm_name,
+            owner_id=user_id,
+            memory=libvirt_params['memory'],
+            vcpus=libvirt_params['vcpus'],
+            disk_size=libvirt_params['disk_size'],
+            os_variant=libvirt_params['os_variant'],
+            status='stopped',
+            vpc_id=vpc_id,
+            subnet_id=subnet_id,
+            private_ip=private_ip,
+            network_name=libvirt_params['network_bridge']
+        )
+        self.db.add(db_vm)
+        self.db.commit()
+        self.db.refresh(db_vm)
+        
+        # Create OVN port if VPC is selected
+        if vpc and subnet and private_ip:
+            try:
+                tenant_name = self._get_tenant_name(user_id)
+                self.ovn.create_vm_port(
+                    tenant_name=tenant_name,
+                    vm_name=vm_name,
+                    private_ip=private_ip,
+                    vni=vpc.vni
+                )
+            except Exception as e:
+                print(f"Warning: Failed to create OVN port: {e}")
+        
+        # Attach security groups
+        security_group_ids = kwargs.get('security_group_ids', [])
+        if security_group_ids:
+            self._attach_security_groups(db_vm.id, security_group_ids, user_id)
+        
+        # Attach SSH keys (store association)
+        ssh_key_ids = kwargs.get('ssh_key_ids', [])
+        if ssh_key_ids:
+            self._attach_ssh_keys(db_vm.id, ssh_key_ids, user_id)
+        
+        return self._merge_vm_data({
+            'name': vm_name,
+            'state': 'stopped',
+            'memory': db_vm.memory,
+            'vcpus': db_vm.vcpus,
+            'cpu_time': 0,
+            'cpu_percent': 0.0,
+            'ip_addresses': [private_ip] if private_ip else [],
+            'disk_usage': {}
+        }, db_vm)
+    
+    # ============================================
+    # VM Power Operations
+    # ============================================
+    
+    def start_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
+        """Start a VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
         if not db_vm:
             raise ValueError("VM not found")
         
-        # Reboot in libvirt
         with LibvirtService() as libvirt:
-            return libvirt.reboot_vm(db_vm.name)
+            success = libvirt.start_vm(db_vm.name)
+            if success:
+                db_vm.status = 'running'
+                self.db.commit()
+                
+                # Refresh IP addresses after start
+                self._refresh_vm_ips(db_vm)
+            return success
+    
+    def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: bool = False) -> bool:
+        """Stop a VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        with LibvirtService() as libvirt:
+            success = libvirt.stop_vm(db_vm.name, force)
+            if success:
+                db_vm.status = 'stopped'
+                self.db.commit()
+            return success
+    
+    def reboot_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
+        """Reboot a VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        with LibvirtService() as libvirt:
+            success = libvirt.reboot_vm(db_vm.name)
+            if success:
+                self._refresh_vm_ips(db_vm)
+            return success
     
     def pause_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-        """Pause a VM (tenant-based)"""
-        query = self.db.query(VM).filter(VM.id == vm_id)
-        if not is_superuser:
-            query = query.filter(VM.owner_id == user_id)
-        
-        db_vm = query.first()
+        """Pause a VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
         if not db_vm:
             raise ValueError("VM not found")
         
@@ -256,12 +272,8 @@ def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: b
             return success
     
     def resume_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-        """Resume a paused VM (tenant-based)"""
-        query = self.db.query(VM).filter(VM.id == vm_id)
-        if not is_superuser:
-            query = query.filter(VM.owner_id == user_id)
-        
-        db_vm = query.first()
+        """Resume a paused VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
         if not db_vm:
             raise ValueError("VM not found")
         
@@ -272,18 +284,30 @@ def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: b
                 self.db.commit()
             return success
     
+    # ============================================
+    # VM Deletion
+    # ============================================
+    
     def delete_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> bool:
-        """Delete a VM (tenant-based)"""
-        # Verify ownership
-        query = self.db.query(VM).filter(VM.id == vm_id)
-        if not is_superuser:
-            query = query.filter(VM.owner_id == user_id)
-        
-        db_vm = query.first()
+        """Delete a VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
         if not db_vm:
             raise ValueError("VM not found")
         
         vm_name = db_vm.name
+        
+        # Delete OVN port if exists
+        if db_vm.vpc_id and db_vm.private_ip:
+            try:
+                vpc = self.db.query(Network).get(db_vm.vpc_id)
+                if vpc:
+                    tenant_name = self._get_tenant_name(db_vm.owner_id)
+                    self.ovn.delete_vm_port(
+                        tenant_name=tenant_name,
+                        vm_name=vm_name
+                    )
+            except Exception as e:
+                print(f"Warning: Failed to delete OVN port: {e}")
         
         # Delete from libvirt
         with LibvirtService() as libvirt:
@@ -293,28 +317,255 @@ def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: b
                 print(f"Warning: Failed to delete VM from libvirt: {e}")
         
         # Delete security group associations
-        from app.models.database import VMSecurityGroup
         self.db.query(VMSecurityGroup).filter(VMSecurityGroup.vm_id == vm_id).delete()
         
-        # Delete from database
+        # Delete SSH key associations (if you have this table)
+        # self.db.query(VMSSHKey).filter(VMSSHKey.vm_id == vm_id).delete()
+        
+        # Delete VM from database
         self.db.delete(db_vm)
         self.db.commit()
         
         return True
     
-    def assign_floating_ip(self, vm_id: int, floating_ip: str, user_id: int, is_superuser: bool = False) -> bool:
-        """Assign floating IP to VM"""
-        query = self.db.query(VM).filter(VM.id == vm_id)
-        if not is_superuser:
-            query = query.filter(VM.owner_id == user_id)
-        
-        db_vm = query.first()
+    # ============================================
+    # Network Operations
+    # ============================================
+    
+    def attach_network(self, vm_id: int, vpc_id: int, subnet_id: int, user_id: int, private_ip: Optional[str] = None) -> Dict[str, Any]:
+        """Attach VM to a VPC network"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
         if not db_vm:
             raise ValueError("VM not found")
         
+        vpc = self.db.query(Network).filter(
+            Network.id == vpc_id,
+            Network.owner_id == user_id
+        ).first()
+        if not vpc:
+            raise ValueError("VPC not found")
+        
+        subnet = self.db.query(Subnet).filter(
+            Subnet.id == subnet_id,
+            Subnet.vpc_id == vpc_id
+        ).first()
+        if not subnet:
+            raise ValueError("Subnet not found")
+        
+        if not private_ip:
+            private_ip = self._allocate_ip_from_subnet(subnet_id, user_id)
+        
+        # Create OVN port
+        tenant_name = self._get_tenant_name(user_id)
+        self.ovn.create_vm_port(
+            tenant_name=tenant_name,
+            vm_name=db_vm.name,
+            private_ip=private_ip,
+            vni=vpc.vni
+        )
+        
+        # Update VM
+        db_vm.vpc_id = vpc_id
+        db_vm.subnet_id = subnet_id
+        db_vm.private_ip = private_ip
+        self.db.commit()
+        
+        return {'vpc_id': vpc_id, 'subnet_id': subnet_id, 'private_ip': private_ip}
+    
+    def detach_network(self, vm_id: int, user_id: int) -> bool:
+        """Detach VM from network"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        if db_vm.vpc_id and db_vm.private_ip:
+            vpc = self.db.query(Network).get(db_vm.vpc_id)
+            if vpc:
+                tenant_name = self._get_tenant_name(user_id)
+                self.ovn.delete_vm_port(tenant_name=tenant_name, vm_name=db_vm.name)
+        
+        db_vm.vpc_id = None
+        db_vm.subnet_id = None
+        db_vm.private_ip = None
+        db_vm.floating_ip = None
+        self.db.commit()
+        
+        return True
+    
+    def assign_floating_ip(self, vm_id: int, floating_ip: str, user_id: int) -> bool:
+        """Assign floating IP to VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        if not db_vm.private_ip:
+            raise ValueError("VM must have a private IP first")
+        
+        # Create NAT rule in OVN
+        tenant_name = self._get_tenant_name(user_id)
+        self.ovn.assign_floating_ip(
+            tenant_name=tenant_name,
+            vm_name=db_vm.name,
+            floating_ip=floating_ip,
+            private_ip=db_vm.private_ip
+        )
+        
         db_vm.floating_ip = floating_ip
         self.db.commit()
+        
         return True
+    
+    def remove_floating_ip(self, vm_id: int, user_id: int) -> bool:
+        """Remove floating IP from VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        if db_vm.floating_ip:
+            # Remove NAT rule
+            tenant_name = self._get_tenant_name(user_id)
+            self.ovn.remove_floating_ip(
+                tenant_name=tenant_name,
+                vm_name=db_vm.name,
+                floating_ip=db_vm.floating_ip
+            )
+        
+        db_vm.floating_ip = None
+        self.db.commit()
+        
+        return True
+    
+    # ============================================
+    # Security Group Operations
+    # ============================================
+    
+    def attach_security_groups(self, vm_id: int, security_group_ids: List[int], user_id: int) -> bool:
+        """Attach security groups to VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        return self._attach_security_groups(vm_id, security_group_ids, user_id)
+    
+    def detach_security_group(self, vm_id: int, security_group_id: int, user_id: int) -> bool:
+        """Detach a security group from VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        self.db.query(VMSecurityGroup).filter(
+            VMSecurityGroup.vm_id == vm_id,
+            VMSecurityGroup.security_group_id == security_group_id
+        ).delete()
+        self.db.commit()
+        
+        # Re-sync firewall rules
+        self._sync_firewall_rules(vm_id)
+        
+        return True
+    
+    def list_security_groups(self, vm_id: int, user_id: int) -> List[Dict[str, Any]]:
+        """List security groups attached to VM"""
+        db_vm = self._get_authorized_vm(vm_id, user_id)
+        if not db_vm:
+            raise ValueError("VM not found")
+        
+        assignments = self.db.query(VMSecurityGroup).filter(VMSecurityGroup.vm_id == vm_id).all()
+        
+        security_groups = []
+        for assignment in assignments:
+            sg = self.db.query(SecurityGroup).get(assignment.security_group_id)
+            if sg:
+                security_groups.append({
+                    'id': sg.id,
+                    'name': sg.name,
+                    'description': sg.description
+                })
+        
+        return security_groups
+    
+    # ============================================
+    # Console Access
+    # ============================================
+    
+    def get_console(self, vm_id: int, user_id: int, is_superuser: bool = False) -> Optional[Dict[str, Any]]:
+        """Get VNC/SPICE console URL"""
+        db_vm = self._get_authorized_vm(vm_id, user_id, is_superuser)
+        if not db_vm:
+            return None
+        
+        with LibvirtService() as libvirt:
+            return libvirt.get_console_url(db_vm.name)
+    
+    # ============================================
+    # Private Helper Methods
+    # ============================================
+    
+    def _get_authorized_vm(self, vm_id: int, user_id: int, is_superuser: bool = False) -> Optional[VM]:
+        """Get VM with authorization check"""
+        query = self.db.query(VM).filter(VM.id == vm_id)
+        if not is_superuser:
+            query = query.filter(VM.owner_id == user_id)
+        return query.first()
+    
+    def _get_tenant_name(self, user_id: int) -> str:
+        """Get tenant name from user_id"""
+        from app.models.database import User
+        user = self.db.query(User).get(user_id)
+        return user.username if user else f"user-{user_id}"
+    
+    def _allocate_ip_from_subnet(self, subnet_id: int, user_id: int) -> Optional[str]:
+        """Allocate next available IP from subnet"""
+        from app.services.vpc_service import VPCService
+        vpc_service = VPCService(self.db)
+        available = vpc_service.get_available_ips(subnet_id, user_id)
+        if available and available.get('available_list'):
+            return available['available_list'][0]
+        return None
+    
+    def _attach_security_groups(self, vm_id: int, security_group_ids: List[int], user_id: int) -> bool:
+        """Attach security groups to VM"""
+        for sg_id in security_group_ids:
+            sg = self.db.query(SecurityGroup).filter(
+                SecurityGroup.id == sg_id,
+                SecurityGroup.owner_id == user_id
+            ).first()
+            if sg:
+                existing = self.db.query(VMSecurityGroup).filter(
+                    VMSecurityGroup.vm_id == vm_id,
+                    VMSecurityGroup.security_group_id == sg_id
+                ).first()
+                if not existing:
+                    vm_sg = VMSecurityGroup(vm_id=vm_id, security_group_id=sg_id)
+                    self.db.add(vm_sg)
+        
+        self.db.commit()
+        self._sync_firewall_rules(vm_id)
+        return True
+    
+    def _attach_ssh_keys(self, vm_id: int, ssh_key_ids: List[int], user_id: int) -> bool:
+        """Attach SSH keys to VM (implement if you have VMSSHKey table)"""
+        # Implement if you have SSH key association table
+        return True
+    
+    def _sync_firewall_rules(self, vm_id: int):
+        """Sync firewall rules for VM"""
+        from app.services.firewall_service import FirewallService
+        firewall_service = FirewallService(self.db)
+        firewall_service._sync_vm_acls(vm_id)
+    
+    def _refresh_vm_ips(self, db_vm: VM):
+        """Refresh VM IP addresses from libvirt"""
+        with LibvirtService() as libvirt:
+            vm_info = libvirt.get_vm(db_vm.name)
+            if vm_info and vm_info.get('ip_addresses'):
+                # Update private IP if changed
+                for ip in vm_info['ip_addresses']:
+                    if ip.startswith('10.') or ip.startswith('172.') or ip.startswith('192.'):
+                        if ip != db_vm.private_ip:
+                            db_vm.private_ip = ip
+                            self.db.commit()
+                        break
     
     def _merge_vm_data(self, libvirt_vm: Dict[str, Any], db_vm: Optional[VM]) -> Dict[str, Any]:
         """Merge libvirt VM data with database VM data"""
@@ -331,24 +582,23 @@ def stop_vm(self, vm_id: int, user_id: int, force: bool = False, is_superuser: b
             vm_data['os_variant'] = db_vm.os_variant
             vm_data['created_at'] = db_vm.created_at.isoformat() if db_vm.created_at else None
             
-            # Get VPC name
             if db_vm.vpc_id:
                 vpc = self.db.query(Network).filter(Network.id == db_vm.vpc_id).first()
                 if vpc:
                     vm_data['vpc_name'] = vpc.name
                     vm_data['vpc_cidr'] = vpc.cidr
             
-            # Get subnet name
             if db_vm.subnet_id:
                 subnet = self.db.query(Subnet).filter(Subnet.id == db_vm.subnet_id).first()
                 if subnet:
                     vm_data['subnet_name'] = subnet.name
                     vm_data['subnet_cidr'] = subnet.cidr
             
-            # Get security groups
             security_groups = []
-            if hasattr(db_vm, 'security_groups') and db_vm.security_groups:
-                for sg in db_vm.security_groups:
+            assignments = self.db.query(VMSecurityGroup).filter(VMSecurityGroup.vm_id == db_vm.id).all()
+            for assignment in assignments:
+                sg = self.db.query(SecurityGroup).get(assignment.security_group_id)
+                if sg:
                     security_groups.append({
                         'id': sg.id,
                         'name': sg.name,
